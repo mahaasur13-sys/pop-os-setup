@@ -1,53 +1,36 @@
+"""
+Runtime bootstrap — wires ClusterNode from components.
+"""
 import sys
 import os
 
-# Resolve shared = cluster/shared, atomos = repo root
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # cluster/
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-from shared.drl_bridge import DRLBridge
-from shared.rpc_server import RPCServer
+# DRLBridge lives in shared/ alongside this file — use relative import
+from .drl_bridge import DRLBridge
+
+from cluster.node.node import ClusterNode
 
 
 class BootstrapNode:
     def __init__(self, node_id: str, peers: list[str]):
         self.node_id = node_id
         self.peers = peers
-        self.drl = None
-        self.rpc = None
-        self.sbs = None
+        self.node = None
         self._running = False
 
     def start(self):
         print(f"[BOOT] {self.node_id} starting with peers: {self.peers}")
 
-        self._init_drl()
-        self._init_rpc()
-        self._init_sbs()
+        self.node = ClusterNode(node_id=self.node_id, peers=self.peers)
+        self.node.start()
 
         self._running = True
-        print(f"[BOOT] {self.node_id} ready")
-
-    def _init_drl(self):
-        self.drl = DRLBridge(self.node_id)
-        print(f"[BOOT] {self.node_id} DRL bridge initialized (loss={self.drl.loss_rate}, delay={self.drl.delay}s)")
-
-    def _init_rpc(self):
-        self.rpc = RPCServer(self.node_id, self.peers)
-        self.rpc.start()
-        print(f"[BOOT] {self.node_id} RPC server started")
-
-    def _init_sbs(self):
-        try:
-            from atomos.sbs.global_invariant_engine import GlobalInvariantEngine
-            self.sbs = GlobalInvariantEngine(mode="distributed")
-            print(f"[BOOT] {self.node_id} SBS GlobalInvariantEngine initialized (mode=distributed)")
-        except ImportError as e:
-            print(f"[WARN] {self.node_id} SBS not available: {e}")
-            self.sbs = None
+        print(f"[BOOT] {self.node_id} fully ready (ClusterNode + all layers)")
 
     def stop(self):
         self._running = False
-        if self.rpc:
-            self.rpc.stop()
+        if self.node:
+            self.node.stop()
         print(f"[SHUTDOWN] {self.node_id} stopped")
