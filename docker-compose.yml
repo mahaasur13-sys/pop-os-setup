@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  node-a:
+    build: ./cluster/node
+    container_name: atom-node-a
+    environment:
+      NODE_ID: node-a
+      PEERS: node-b,node-c
+    networks:
+      - atom-net
+    volumes:
+      - shared-data:/app/shared_data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-b:
+    build: ./cluster/node
+    container_name: atom-node-b
+    environment:
+      NODE_ID: node-b
+      PEERS: node-a,node-c
+    networks:
+      - atom-net
+    volumes:
+      - shared-data:/app/shared_data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-c:
+    build: ./cluster/node
+    container_name: atom-node-c
+    environment:
+      NODE_ID: node-c
+      PEERS: node-a,node-b
+    networks:
+      - atom-net
+    volumes:
+      - shared-data:/app/shared_data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  shared-data:
+
+networks:
+  atom-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
