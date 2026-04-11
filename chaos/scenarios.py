@@ -1,252 +1,299 @@
 """
-ChaosScenarios — pre-built Jepsen-style fault scenarios.
-
-Named scenarios that inject coordinated faults across layers
-to test specific failure modes (split-brain, quorum loss, etc.).
-
-Usage
------
-    from chaos.scenarios import ChaosScenarios
-
-    ChaosScenarios.split_brain(adapter)
-    ChaosScenarios.quorum_loss(adapter)
-    ChaosScenarios.temporal_drift(adapter)
+Named chaos scenarios — fault injection scenarios for cluster validation.
 """
 
 from __future__ import annotations
+import subprocess, os, json
+from typing import Optional
 
-from chaos.harness import FAULT_TYPE, LayerFaultAdapter
+
+# ── Base class ────────────────────────────────────────────────────────────────
 
 
-class ChaosScenarios:
+class ChaosScenario:
     """
-    Pre-built fault scenarios aligned with Jepsen's fault model:
-    https://jepsen.io/faults
+    Base class for a single chaos scenario.
 
-    Each scenario targets a specific failure mode and is designed
-    to expose invariants violations if the system is not resilient.
+    Subclasses must define:
+      name        : unique identifier
+      description : human-readable one-liner
+      fault_type  : Jepsen-aligned fault type
+      duration_s  : how long the fault should run (seconds)
+      params      : scenario-specific parameters dict
+
+    and implement:
+      apply(cluster_ctx) → {"ok": bool, "detail": str}
+      rollback() → None
     """
 
-    # ── Split-brain scenarios ────────────────────────────────────────────────
+    name: str = ""
+    description: str = ""
+    fault_type: str = ""
+    duration_s: float = 10.0
+    params: dict = {}
 
-    @staticmethod
-    def split_brain_50_50(adapter: LayerFaultAdapter) -> None:
-        """
-        Split the cluster into two equal partitions.
-        Tests: leader uniqueness, quorum safety, split-brain detection.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("f2", FAULT_TYPE.PARTITION)
+    def apply(self, cluster_ctx: dict) -> dict:
+        raise NotImplementedError
 
-    @staticmethod
-    def split_brain_asymmetric(adapter: LayerFaultAdapter) -> None:
-        """
-        Asymmetric split: majority vs minority partition.
-        Tests: quorum violation detection in minority partition.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("ccl", FAULT_TYPE.PARTITION)
-        adapter.inject("f2", FAULT_TYPE.PARTITION)
+    def rollback(self) -> None:
+        pass
 
-    @staticmethod
-    def heal_partition(adapter: LayerFaultAdapter) -> None:
-        """
-        Heal an active partition and verify convergence.
-        Tests: recovery, monotonic commit index, state reconciliation.
-        """
-        adapter.inject("drl", FAULT_TYPE.RECOVER)
-        adapter.inject("f2", FAULT_TYPE.RECOVER)
 
-    # ── Message loss scenarios ───────────────────────────────────────────────
+# ── Registry ────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def message_loss_low(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject 10-20% message loss.
-        Tests: basic retry / ACK timeout handling.
-        """
-        adapter.inject("drl", FAULT_TYPE.DROP, loss_rate=0.15)
 
-    @staticmethod
-    def message_loss_high(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject 30-50% message loss.
-        Tests: quorum maintenance under severe loss.
-        """
-        adapter.inject("f2", FAULT_TYPE.DROP, loss_rate=0.4)
+SCENARIO_REGISTRY: dict[str, ChaosScenario] = {}
 
-    @staticmethod
-    def message_loss_cascade(adapter: LayerFaultAdapter) -> None:
-        """
-        Multi-layer message loss across DRL + F2.
-        Tests: consensus resilience under coordinated loss.
-        """
-        adapter.inject("drl", FAULT_TYPE.DROP, loss_rate=0.3)
-        adapter.inject("f2", FAULT_TYPE.DROP, loss_rate=0.3)
 
-    # ── Latency / delay scenarios ────────────────────────────────────────────
+def _reg(cls):
+    """Register a ChaosScenario subclass in SCENARIO_REGISTRY."""
+    SCENARIO_REGISTRY[cls.name] = cls()
+    return cls
 
-    @staticmethod
-    def latency_spike(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject moderate latency spike (50-200ms).
-        Tests: timeout handling, leader heartbeat.
-        """
-        adapter.inject("drl", FAULT_TYPE.DELAY, lo=50, hi=200)
 
-    @staticmethod
-    def latency_severe(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject severe latency (200-500ms).
-        Tests: quorum timeout, leader re-election.
-        """
-        adapter.inject("drl", FAULT_TYPE.DELAY, lo=200, hi=500)
-        adapter.inject("ccl", FAULT_TYPE.DELAY, lo=200, hi=500)
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCENARIO IMPLEMENTATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    @staticmethod
-    def latency_partition_combo(adapter: LayerFaultAdapter) -> None:
-        """
-        Combined latency + partition attack.
-        Tests: split-brain detection under latency.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("drl", FAULT_TYPE.DELAY, lo=100, hi=400)
 
-    # ── Duplicate message scenarios ─────────────────────────────────────────
+@_reg
+class _PartitionHalfCluster(ChaosScenario):
+    """
+    Full bidirectional partition between node-a and node-b.
+    Node-c remains reachable from both halves.
+    """
+    name = "partition_half_cluster"
+    description = "Bidirectional partition between node-a and node-b (node-c reachable)"
+    fault_type = "partition"
+    duration_s = 15.0
+    params = {"partition_peers": ["node-a", "node-b"], "exempt": ["node-c"]}
 
-    @staticmethod
-    def duplicate_acks_low(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject low-rate duplicate ACKs (10-20%).
-        Tests: duplicate detection, idempotency.
-        """
-        adapter.inject("f2", FAULT_TYPE.DUPLICATE, dup_rate=0.15)
+    _rules: list = []
+    _cleanup: list = []
 
-    @staticmethod
-    def duplicate_acks_high(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject high-rate duplicate ACKs (40-60%).
-        Tests: Byzantine signal detection.
-        """
-        adapter.inject("f2", FAULT_TYPE.DUPLICATE, dup_rate=0.5)
+    def apply(self, cluster_ctx: dict) -> dict:
+        self._rules = [
+            "iptables -I DOCKER-USER -s 172.28.1.10 -d 172.28.1.11 -j DROP",
+            "iptables -I DOCKER-USER -s 172.28.1.11 -d 172.28.1.10 -j DROP",
+        ]
+        self._cleanup = [
+            "iptables -D DOCKER-USER -s 172.28.1.10 -d 172.28.1.11 -j DROP",
+            "iptables -D DOCKER-USER -s 172.28.1.11 -d 172.28.1.10 -j DROP",
+        ]
+        for r in self._rules:
+            subprocess.run(r, shell=True, capture_output=True)
+        return {"ok": True, "detail": "partition applied: A↮B, C reachable"}
 
-    # ── Byzantine / corruption scenarios ────────────────────────────────────
+    def rollback(self) -> None:
+        for r in self._cleanup:
+            subprocess.run(r, shell=True, capture_output=True)
+        self._rules.clear()
+        self._cleanup.clear()
 
-    @staticmethod
-    def data_corruption(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject data corruption into DRL state.
-        Tests: checksum validation, state integrity invariants.
-        """
-        adapter.inject("drl", FAULT_TYPE.CORRUPT)
 
-    @staticmethod
-    def byzantine_equivocation(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject Byzantine behavior (equivocation) in F2 layer.
-        Tests: leadership uniqueness, no equivocation invariants.
-        """
-        adapter.inject("f2", FAULT_TYPE.BYZANTINE)
+@_reg
+class _AsymmetricPartition(ChaosScenario):
+    """
+    Block A→B but allow B→A (one-way heartbeat failure).
+    """
+    name = "asymmetric_partition"
+    description = "One-way block: A→B dropped, B→A allowed"
+    fault_type = "partition"
+    duration_s = 15.0
+    params = {"asymmetric": True, "blocked": ["node-a"], "target": "node-b"}
 
-    @staticmethod
-    def byzantine_fork(adapter: LayerFaultAdapter) -> None:
-        """
-        Simulate a fork attack (conflicting writes to different nodes).
-        Tests: DESC append-only, sequence integrity invariants.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("f2", FAULT_TYPE.DUPLICATE, dup_rate=0.4)
+    _rules: list = []
 
-    # ── Temporal scenarios ─────────────────────────────────────────────────
+    def apply(self, cluster_ctx: dict) -> dict:
+        self._rules = ["iptables -I DOCKER-USER -s 172.28.1.10 -d 172.28.1.11 -j DROP"]
+        for r in self._rules:
+            subprocess.run(r, shell=True, capture_output=True)
+        return {"ok": True, "detail": "asymmetric partition: A→B blocked, B→A ok"}
 
-    @staticmethod
-    def clock_skew_moderate(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject moderate clock skew (50-100ms).
-        Tests: temporal drift detection threshold.
-        """
-        adapter.inject("drl", FAULT_TYPE.CLOCK_SKEW, skew_ms=75.0)
+    def rollback(self) -> None:
+        for r in self._rules:
+            subprocess.run(r.replace("-I", "-D"), shell=True, capture_output=True)
+        self._rules.clear()
 
-    @staticmethod
-    def clock_skew_severe(adapter: LayerFaultAdapter) -> None:
-        """
-        Inject severe clock skew (>150ms).
-        Tests: TEMPORAL_DRIFT invariant violation.
-        """
-        adapter.inject("drl", FAULT_TYPE.CLOCK_SKEW, skew_ms=200.0)
 
-    # ── Quorum scenarios ────────────────────────────────────────────────────
+@_reg
+class _SlowNodeAmplification(ChaosScenario):
+    """
+    Inject a 2s pre-processing delay into node-a's RPC path.
+    """
+    name = "slow_node_amplification"
+    description = "Inject 2s pre-processing delay into node-a's RPC path"
+    fault_type = "timeout"
+    duration_s = 15.0
+    params = {"target": "node-a", "delay_s": 2.0}
 
-    @staticmethod
-    def quorum_degradation(adapter: LayerFaultAdapter) -> None:
-        """
-        Degrade quorum by combining partition + message loss.
-        Tests: QUORUM_VIOLATION detection.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("f2", FAULT_TYPE.DROP, loss_rate=0.4)
+    def apply(self, cluster_ctx: dict) -> dict:
+        t, d = self.params["target"], self.params["delay_s"]
+        with open(f"/tmp/chaos_slow_{t}", "w") as f:
+            f.write(f"{d}\n")
+        os.utime(f"/tmp/chaos_slow_{t}", None)
+        return {"ok": True, "detail": f"slow injection: {t} +{d}s delay per RPC"}
 
-    @staticmethod
-    def quorum_loss_complete(adapter: LayerFaultAdapter) -> None:
-        """
-        Complete quorum loss: partition all nodes.
-        Tests: system halts correctly, no unsafe commits.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("ccl", FAULT_TYPE.PARTITION)
-        adapter.inject("f2", FAULT_TYPE.PARTITION)
+    def rollback(self) -> None:
+        try:
+            os.remove(f"/tmp/chaos_slow_{self.params['target']}")
+        except OSError:
+            pass
 
-    # ── Recovery scenarios ─────────────────────────────────────────────────
 
-    @staticmethod
-    def partition_and_recover(adapter: LayerFaultAdapter) -> None:
-        """
-        Split then heal. Tests post-partition recovery and convergence.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("ccl", FAULT_TYPE.PARTITION)
-        adapter.inject("drl", FAULT_TYPE.RECOVER)
-        adapter.inject("ccl", FAULT_TYPE.RECOVER)
+@_reg
+class _ByzantineSenderInjection(ChaosScenario):
+    """
+    Node-c sends conflicting Forward results to A and B.
+    """
+    name = "byzantine_sender_injection"
+    description = "Node-C sends conflicting state to A and B"
+    fault_type = "byzantine"
+    duration_s = 15.0
+    params = {
+        "byzantine_node": "node-c",
+        "conflicting_terms": {"term": 3, "conflicting_commit_indices": [10, 11]},
+    }
 
-    @staticmethod
-    def rapid_partition_heal_cycle(adapter: LayerFaultAdapter, cycles: int = 3) -> None:
-        """
-        Rapid cycle: partition → heal → partition → heal.
-        Tests: state machine idempotency and recovery speed.
-        """
-        for _ in range(cycles):
-            adapter.inject("drl", FAULT_TYPE.PARTITION)
-            adapter.inject("f2", FAULT_TYPE.PARTITION)
-            adapter.inject("drl", FAULT_TYPE.RECOVER)
-            adapter.inject("f2", FAULT_TYPE.RECOVER)
+    def apply(self, cluster_ctx: dict) -> dict:
+        with open("/tmp/chaos_byzantine_node_c", "w") as f:
+            json.dump(self.params["conflicting_terms"], f)
+        return {"ok": True, "detail": "byzantine injection: node-c will send conflicting state"}
 
-    # ── Composite attack scenarios ─────────────────────────────────────────
+    def rollback(self) -> None:
+        try:
+            os.remove("/tmp/chaos_byzantine_node_c")
+        except OSError:
+            pass
 
-    @staticmethod
-    def composite_byzantine_partition(adapter: LayerFaultAdapter) -> None:
-        """
-        Combined Byzantine + partition attack.
-        Tests: SBS invariants under simultaneous fault modes.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("f2", FAULT_TYPE.BYZANTINE)
-        adapter.inject("drl", FAULT_TYPE.DELAY, lo=100, hi=300)
 
-    @staticmethod
-    def composite_loss_and_skew(adapter: LayerFaultAdapter) -> None:
-        """
-        Combined message loss + clock skew.
-        Tests: consensus under temporal and network stress.
-        """
-        adapter.inject("drl", FAULT_TYPE.DROP, loss_rate=0.3)
-        adapter.inject("drl", FAULT_TYPE.CLOCK_SKEW, skew_ms=150.0)
+@_reg
+class _ClockSkewEscalation(ChaosScenario):
+    """
+    Drift node-c's clock by +5000ms relative to cluster time.
+    """
+    name = "clock_skew_escalation"
+    description = "Inject +5000ms clock drift into node-c"
+    fault_type = "clock_skew"
+    duration_s = 15.0
+    params = {"target": "node-c", "skew_ms": 5000}
 
-    @staticmethod
-    def jepsen_register(adapter: LayerFaultAdapter) -> None:
-        """
-        Jepsen's classic register test: concurrent writes under network faults.
-        Tests: linearizability, serializability of commits.
-        """
-        adapter.inject("drl", FAULT_TYPE.PARTITION)
-        adapter.inject("f2", FAULT_TYPE.DUPLICATE, dup_rate=0.3)
-        adapter.inject("ccl", FAULT_TYPE.DELAY, lo=50, hi=200)
+    def apply(self, cluster_ctx: dict) -> dict:
+        t, sk = self.params["target"], self.params["skew_ms"]
+        with open(f"/tmp/chaos_clock_skew_{t}", "w") as f:
+            f.write(f"{sk}\n")
+        return {"ok": True, "detail": f"clock skew: {t} +{sk}ms drift"}
+
+    def rollback(self) -> None:
+        try:
+            os.remove(f"/tmp/chaos_clock_skew_{self.params['target']}")
+        except OSError:
+            pass
+
+
+@_reg
+class _LossBurst(ChaosScenario):
+    """
+    Spike DRL loss rate from 5% to 80% on node-a.
+    """
+    name = "loss_burst"
+    description = "Spike loss rate 5% → 80% on node-a outbound links"
+    fault_type = "drop"
+    duration_s = 15.0
+    params = {"target": "node-a", "loss_rate": 0.80}
+
+    def apply(self, cluster_ctx: dict) -> dict:
+        t, rate = self.params["target"], self.params["loss_rate"]
+        with open(f"/tmp/chaos_loss_{t}", "w") as f:
+            f.write(f"{rate}\n")
+        return {"ok": True, "detail": f"loss burst: {t} loss={rate:.0%}"}
+
+    def rollback(self) -> None:
+        try:
+            os.remove(f"/tmp/chaos_loss_{self.params['target']}")
+        except OSError:
+            pass
+
+
+@_reg
+class _NodeIsolation(ChaosScenario):
+    """
+    Isolate node-c completely: block C↔A and C↔B.
+    A+B form majority. C thinks it's still leader (split-brain).
+    """
+    name = "node_isolation"
+    description = "Isolate node-c: C↮A and C↮B blocked, A+B form majority"
+    fault_type = "partition"
+    duration_s = 15.0
+    params = {"isolated_node": "node-c"}
+
+    _rules: list = []
+
+    def apply(self, cluster_ctx: dict) -> dict:
+        self._rules = [
+            "iptables -I DOCKER-USER -s 172.28.1.12 -d 172.28.1.10 -j DROP",
+            "iptables -I DOCKER-USER -s 172.28.1.10 -d 172.28.1.12 -j DROP",
+            "iptables -I DOCKER-USER -s 172.28.1.12 -d 172.28.1.11 -j DROP",
+            "iptables -I DOCKER-USER -s 172.28.1.11 -d 172.28.1.12 -j DROP",
+        ]
+        for r in self._rules:
+            subprocess.run(r, shell=True, capture_output=True)
+        return {"ok": True, "detail": "node-c isolated from A+B"}
+
+    def rollback(self) -> None:
+        for r in self._rules:
+            subprocess.run(r.replace("-I", "-D"), shell=True, capture_output=True)
+        self._rules.clear()
+
+
+@_reg
+class _LatencySpike(ChaosScenario):
+    """
+    Spike DRL delay_mean from 30ms to 2000ms on node-a.
+    """
+    name = "latency_spike"
+    description = "Spike DRL delay 30ms → 2000ms on node-a"
+    fault_type = "timeout"
+    duration_s = 15.0
+    params = {"target": "node-a", "delay_mean": 2.0, "delay_std": 0.5}
+
+    def apply(self, cluster_ctx: dict) -> dict:
+        t, dm, ds = self.params["target"], self.params["delay_mean"], self.params["delay_std"]
+        with open(f"/tmp/chaos_delay_{t}", "w") as f:
+            f.write(f"{dm}\n{ds}\n")
+        return {"ok": True, "detail": f"latency spike: {t} delay={dm}s±{ds}s"}
+
+    def rollback(self) -> None:
+        t = self.params["target"]
+        for s in ["", "_std"]:
+            try:
+                os.remove(f"/tmp/chaos_delay_{t}{s}")
+            except OSError:
+                pass
+
+
+# ── Factory functions ─────────────────────────────────────────────────────────
+
+def partition_half_cluster() -> ChaosScenario:
+    return _PartitionHalfCluster()
+
+def asymmetric_partition() -> ChaosScenario:
+    return _AsymmetricPartition()
+
+def slow_node_amplification() -> ChaosScenario:
+    return _SlowNodeAmplification()
+
+def byzantine_sender_injection() -> ChaosScenario:
+    return _ByzantineSenderInjection()
+
+def clock_skew_escalation() -> ChaosScenario:
+    return _ClockSkewEscalation()
+
+def loss_burst() -> ChaosScenario:
+    return _LossBurst()
+
+def node_isolation() -> ChaosScenario:
+    return _NodeIsolation()
+
+def latency_spike() -> ChaosScenario:
+    return _LatencySpike()

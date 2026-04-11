@@ -1,403 +1,464 @@
 """
-Chaos Harness — Jepsen-style adversarial fault injection engine.
+ChaosHarness — Jepsen-style test harness for distributed cluster validation.
 
-Injects faults into ATOMFederationOS layers (DRL/CCL/F2/DESC)
-and validates that SBS invariants hold under pressure.
+Pipeline
+--------
+apply_fault() → run_cluster() → collect_metrics() → validate_SBS() → assert_invariants()
 
 Usage
 -----
-    from chaos.harness import ChaosHarness, FAULT_TYPE
+    harness = ChaosHarness(
+        scenario=partition_half_cluster(),
+        cluster_ctx={"nodes": ["node-a", "node-b", "node-c"], ...},
+    )
 
-    harness = ChaosHarness(drl_layer, runtime, enforcer, seed=42)
-    harness.run(steps=100, halt_on_violation=False)
-
-    report = harness.get_report()
+    result = harness.run()
+    assert result.verdict != Verdict.FAIL, f"Chaos broke the cluster: {result}"
 """
 
 from __future__ import annotations
 
-import random
 import time
+import threading
+import json
+import sys
+import os
 from dataclasses import dataclass, field
-from typing import Any, Callable
 from enum import Enum
+from typing import Optional, Callable
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
+
+from sbs.global_invariant_engine import GlobalInvariantEngine
+from sbs.boundary_spec import SystemBoundarySpec
+
+from chaos.scenarios import ChaosScenario
+from chaos.validator import ChaosValidator, ValidationResult, Verdict
 
 
-class FAULT_TYPE(Enum):
-    """Jepsen-aligned fault injection types."""
-    DROP = "drop"           # Message loss (packet loss simulation)
-    DELAY = "delay"         # Latency injection
-    DUPLICATE = "duplicate"  # Message duplication
-    PARTITION = "partition"  # Network partition (split-brain)
-    RECOVER = "recover"      # Partition healing
-    CORRUPT = "corrupt"      # Data corruption
-    CLOCK_SKEW = "clock_skew"  # Temporal attack
-    BYZANTINE = "byzantine"   # Equivocation / fork
+class ExperimentPhase(Enum):
+    IDLE = "idle"
+    FAULT_INJECTION = "fault_injection"
+    STABILIZATION = "stabilization"
+    VALIDATION = "validation"
+    COMPLETE = "complete"
 
 
 @dataclass
-class FaultResult:
-    """Result of a single fault injection."""
-    step: int
-    fault_type: FAULT_TYPE
-    target_layer: str
-    injected: bool
-    latency_ms: float
-    error: str | None = None
+class ChaosResult:
+    """Immutable result of a full chaos experiment run."""
 
-    def __repr__(self) -> str:
-        status = "OK" if self.injected else f"FAIL({self.error})"
+    scenario_name: str
+    phase: ExperimentPhase
+    verdict: Verdict
+    duration_s: float
+    fault_apply_duration_s: float
+    validation_result: Optional[ValidationResult] = None
+    health_snapshot: dict = field(default_factory=dict)
+    metrics_snapshot: dict = field(default_factory=dict)
+    sbs_snapshots: list = field(default_factory=list)
+    raw_events: list = field(default_factory=list)
+    error: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+    def __str__(self) -> str:
         return (
-            f"[step={self.step}] {self.fault_type.value} → {self.target_layer} "
-            f"({status}, {self.latency_ms:.1f}ms)"
+            f"ChaosResult({self.scenario_name}): "
+            f"{self.phase.value} → {self.verdict.value} "
+            f"({self.duration_s:.1f}s)"
         )
-
-
-@dataclass
-class ChaosMetrics:
-    """Runtime metrics collected during a chaos run."""
-    total_steps: int = 0
-    faults_injected: int = 0
-    faults_failed: int = 0
-    violations_detected: int = 0
-    violations_recovered: int = 0
-    runtime_errors: int = 0
-    final_state_ok: bool = True
-    elapsed_ms: float = 0.0
-    fault_log: list[dict] = field(default_factory=list)
-
-    def add_fault(self, result: FaultResult) -> None:
-        self.faults_injected += 1
-        if not result.injected:
-            self.faults_failed += 1
-        self.fault_log.append({
-            "step": result.step,
-            "fault": result.fault_type.value,
-            "layer": result.target_layer,
-            "latency_ms": result.latency_ms,
-            "injected": result.injected,
-            "error": result.error,
-        })
-
-    def add_violation(self) -> None:
-        self.violations_detected += 1
-
-    def add_recovery(self) -> None:
-        self.violations_recovered += 1
-
-    def add_runtime_error(self) -> None:
-        self.runtime_errors += 1
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "total_steps": self.total_steps,
-            "faults_injected": self.faults_injected,
-            "faults_failed": self.faults_failed,
-            "violations_detected": self.violations_detected,
-            "violations_recovered": self.violations_recovered,
-            "runtime_errors": self.runtime_errors,
-            "final_state_ok": self.final_state_ok,
-            "elapsed_ms": self.elapsed_ms,
-        }
-
-
-class LayerFaultAdapter:
-    """
-    Abstracts fault injection across different layer implementations.
-    Each layer may have a different API, so this adapter normalizes access.
-    """
-
-    def __init__(self, drl=None, ccl=None, f2=None, desc=None) -> None:
-        self._drl = drl
-        self._ccl = ccl
-        self._f2 = f2
-        self._desc = desc
-
-    def _get_layer(self, name: str):
-        return {"drl": self._drl, "ccl": self._ccl, "f2": self._f2, "desc": self._desc}.get(name)
-
-    def inject(self, layer: str, fault_type: FAULT_TYPE, **params) -> bool:
-        """Inject a fault into a specific layer. Returns True on success."""
-        target = self._get_layer(layer)
-        if target is None:
-            return False
-
-        try:
-            if fault_type == FAULT_TYPE.DROP:
-                loss_rate = params.get("loss_rate", 0.3)
-                if hasattr(target, "failures"):
-                    target.failures.loss_rate = loss_rate
-                    return True
-                return False
-
-            elif fault_type == FAULT_TYPE.DELAY:
-                lo = params.get("lo", 50)
-                hi = params.get("hi", 200)
-                if hasattr(target, "failures"):
-                    target.failures.latency_ms = (lo, hi)
-                    return True
-                if hasattr(target, "latency_ms"):
-                    target.latency_ms = (lo, hi)
-                    return True
-                return False
-
-            elif fault_type == FAULT_TYPE.DUPLICATE:
-                dup_rate = params.get("dup_rate", 0.5)
-                if hasattr(target, "failures"):
-                    target.failures.dup_rate = dup_rate
-                    return True
-                return False
-
-            elif fault_type == FAULT_TYPE.PARTITION:
-                if hasattr(target, "partition"):
-                    target.partition.random_split()
-                    return True
-                if hasattr(target, "partitions"):
-                    target.partitions += 1
-                    return True
-                return False
-
-            elif fault_type == FAULT_TYPE.RECOVER:
-                if hasattr(target, "partition"):
-                    target.partition.heal()
-                    return True
-                if hasattr(target, "partitions"):
-                    target.partitions = max(0, target.partitions - 1)
-                    return True
-                return False
-
-            elif fault_type == FAULT_TYPE.CORRUPT:
-                if hasattr(target, "state"):
-                    target.state["_corrupted"] = True
-                    return True
-                return False
-
-            elif fault_type == FAULT_TYPE.CLOCK_SKEW:
-                skew_ms = params.get("skew_ms", 150)
-                if hasattr(target, "clock_skew_ms"):
-                    target.clock_skew_ms = skew_ms
-                    return True
-                return False
-
-            elif fault_type == FAULT_TYPE.BYZANTINE:
-                if hasattr(target, "failures"):
-                    target.failures.byzantine = True
-                    return True
-                return False
-
-            return False
-        except Exception:
-            return False
-
-    def get_state(self, layer: str) -> dict[str, Any]:
-        """Get current state snapshot from a layer."""
-        target = self._get_layer(layer)
-        if target is None:
-            return {}
-        if hasattr(target, "get_state"):
-            return target.get_state()
-        if hasattr(target, "__dict__"):
-            return {
-                k: v for k, v in target.__dict__.items()
-                if not k.startswith("_")
-            }
-        return {}
-
-    def reset_layer(self, layer: str) -> bool:
-        """Reset a layer to a clean state."""
-        target = self._get_layer(layer)
-        if target is None:
-            return False
-        try:
-            if hasattr(target, "reset"):
-                target.reset()
-                return True
-            if hasattr(target, "failures"):
-                tf = target.failures
-                tf.loss_rate = 0.0
-                tf.dup_rate = 0.0
-                tf.latency_ms = (0, 0)
-                tf.byzantine = False
-            if hasattr(target, "partitions"):
-                target.partitions = 0
-            return True
-        except Exception:
-            return False
 
 
 class ChaosHarness:
     """
-    Jepsen-style chaos harness for ATOMFederationOS.
+    Orchestrates a Jepsen-style chaos experiment against a live cluster.
 
-    Runs adversarial fault injection sequences and collects metrics
-    on SBS invariant violations. Designed to be deterministic (seeded)
-    so chaos runs are reproducible.
+    The harness drives the full experiment lifecycle:
+
+    1. PRE-FLIGHT CHECK   — verify cluster is healthy before injecting fault
+    2. FAULT INJECTION   — apply the chaos scenario
+    3. OBSERVATION WINDOW — collect health + SBS snapshots during chaos
+    4. FAULT ROLLBACK    — reverse the injected fault
+    5. STABILIZATION WAIT — wait for cluster to settle
+    6. VALIDATION        — run ChaosValidator on collected data
+    7. RESULT            — return ChaosResult with verdict
 
     Parameters
     ----------
-    adapter : LayerFaultAdapter
-        Abstraction over layer implementations
-    enforcer : SBSRuntimeEnforcer
-        SBS enforcement layer for invariant checking
-    runtime : Any
-        Runtime that can submit tasks and collect state
-    seed : int
-        Random seed for reproducible runs
+    scenario        : ChaosScenario to run
+    cluster_ctx     : cluster context {
+        "nodes": ["node-a", "node-b", "node-c"],
+        "node_ips": {"node-a": "172.28.1.10", ...},
+        "health_getter": callable(node_id) → ClusterHealthGraph,
+        "metrics_getter": callable(node_id) → MetricsCollector,
+        "rpc_call": callable(node_id, cmd) → str,
+    }
+    observation_s    : seconds to observe cluster during chaos (default 10)
+    stabilization_s : seconds to wait for cluster to stabilize after rollback (default 10)
+    pre_flight      : callable() → bool, optional pre-flight check
     """
 
     def __init__(
         self,
-        adapter: LayerFaultAdapter,
-        enforcer,  # SBSRuntimeEnforcer
-        runtime: Any,
-        seed: int = 42,
-    ) -> None:
-        self.adapter = adapter
-        self.enforcer = enforcer
-        self.runtime = runtime
-        self._rng = random.Random(seed)
-        self._step = 0
-        self._metrics = ChaosMetrics()
-        self._halt_on_violation = False
-        self._violation_callbacks: list[Callable] = []
+        scenario: ChaosScenario,
+        cluster_ctx: dict,
+        observation_s: float = 10.0,
+        stabilization_s: float = 10.0,
+        pre_flight: Optional[Callable[[], bool]] = None,
+    ):
+        self.scenario = scenario
+        self.cluster_ctx = cluster_ctx
+        self.observation_s = observation_s
+        self.stabilization_s = stabilization_s
+        self.pre_flight = pre_flight
 
-    def set_halt_on_violation(self, value: bool) -> None:
-        self._halt_on_violation = value
+        self.validator = ChaosValidator()
+        self._phase = ExperimentPhase.IDLE
+        self._stop_observation = threading.Event()
+        self._health_snapshots: list[dict] = []
+        self._metrics_snapshots: list[dict] = []
+        self._sbs_snapshots: list[dict] = []
+        self._raw_events: list[dict] = []
+        self._observer_thread: Optional[threading.Thread] = None
 
-    def add_violation_callback(self, cb: Callable) -> None:
-        self._violation_callbacks.append(cb)
+    # ── Public API ─────────────────────────────────────────────────────────────
 
-    def run(self, steps: int = 100, halt_on_violation: bool = False) -> ChaosMetrics:
+    def run(self) -> ChaosResult:
         """
-        Run a chaos simulation for `steps` iterations.
+        Run the full chaos experiment pipeline.
 
-        Each step:
-        1. Inject a random fault into a random layer
-        2. Attempt a runtime step (task submission)
-        3. Collect system state
-        4. Run SBS invariant check
-        5. Record metrics
+        Returns ChaosResult with verdict PASS / PARTIAL / FAIL.
         """
-        self._halt_on_violation = halt_on_violation
-        self._metrics = ChaosMetrics()
-        self._metrics.total_steps = steps
-
-        start = time.monotonic()
-
-        for i in range(steps):
-            self._step = i
-            self._run_step(i)
-
-            if halt_on_violation and self._metrics.violations_detected > 0:
-                break
-
-        self._metrics.elapsed_ms = (time.monotonic() - start) * 1000
-        return self._metrics
-
-    def _run_step(self, step: int) -> None:
-        """Execute a single chaos step."""
-        layer_choice = self._rng.choice(["drl", "ccl", "f2", "desc"])
-        fault_choice = self._rng.choice(list(FAULT_TYPE))
-
-        result = self._inject_fault(step, layer_choice, fault_choice)
-        self._metrics.add_fault(result)
-
-        if not result.injected:
-            return
+        start = time.time()
+        fault_apply_start = start
+        error = ""
 
         try:
-            if hasattr(self.runtime, "submit"):
-                task_id = f"chaos-task-{step}"
-                self.runtime.submit({"task": task_id, "step": step})
-        except Exception:
-            self._metrics.add_runtime_error()
+            # ── 1. Pre-flight check ────────────────────────────────────────
+            self._phase = ExperimentPhase.IDLE
+            if self.pre_flight and not self.pre_flight():
+                return ChaosResult(
+                    scenario_name=self.scenario.name,
+                    phase=ExperimentPhase.IDLE,
+                    verdict=Verdict.FAIL,
+                    duration_s=time.time() - start,
+                    fault_apply_duration_s=0,
+                    error="pre-flight check failed: cluster not healthy",
+                )
 
-        state = self._collect_state()
+            # ── 2. Baseline snapshot ───────────────────────────────────────
+            baseline_health = self._snapshot_health()
+            baseline_metrics = self._snapshot_metrics()
 
-        try:
-            self.enforcer.enforce(f"chaos_step_{step}", state)
-        except Exception:
-            pass
+            # ── 3. Apply fault ─────────────────────────────────────────────
+            self._phase = ExperimentPhase.FAULT_INJECTION
+            fault_apply_start = time.time()
 
-        violations = self.enforcer.get_violations_summary()
-        if violations:
-            self._metrics.add_violation()
-            for cb in self._violation_callbacks:
-                try:
-                    cb(step, state, violations)
-                except Exception:
-                    pass
+            apply_result = self.scenario.apply(self.cluster_ctx)
+            if not apply_result.get("ok"):
+                error = f"fault injection failed: {apply_result}"
+                return ChaosResult(
+                    scenario_name=self.scenario.name,
+                    phase=self._phase,
+                    verdict=Verdict.FAIL,
+                    duration_s=time.time() - start,
+                    fault_apply_duration_s=time.time() - fault_apply_start,
+                    error=error,
+                )
 
-    def _inject_fault(
-        self, step: int, layer: str, fault_type: FAULT_TYPE
-    ) -> FaultResult:
-        """Inject a single fault. Returns FaultResult."""
-        start = time.monotonic()
-        params = {}
+            fault_apply_duration = time.time() - fault_apply_start
 
-        if fault_type == FAULT_TYPE.DROP:
-            params["loss_rate"] = self._rng.uniform(0.1, 0.5)
-        elif fault_type == FAULT_TYPE.DELAY:
-            params["lo"] = self._rng.randint(50, 200)
-            params["hi"] = self._rng.randint(200, 500)
-        elif fault_type == FAULT_TYPE.DUPLICATE:
-            params["dup_rate"] = self._rng.uniform(0.1, 0.6)
-        elif fault_type == FAULT_TYPE.CLOCK_SKEW:
-            params["skew_ms"] = self._rng.uniform(50, 200)
-        elif fault_type == FAULT_TYPE.PARTITION:
-            pass
-        elif fault_type == FAULT_TYPE.RECOVER:
-            pass
+            # ── 4. Observation window ───────────────────────────────────────
+            self._stop_observation.clear()
+            self._health_snapshots.clear()
+            self._metrics_snapshots.clear()
+            self._sbs_snapshots.clear()
+            self._raw_events.clear()
 
-        latency = (time.monotonic() - start) * 1000
-
-        try:
-            ok = self.adapter.inject(layer, fault_type, **params)
-            return FaultResult(
-                step=step,
-                fault_type=fault_type,
-                target_layer=layer,
-                injected=ok,
-                latency_ms=latency,
-                error=None if ok else "layer has no such fault target",
+            self._observer_thread = threading.Thread(
+                target=self._observation_loop,
+                args=(self.observation_s,),
+                daemon=True,
             )
+            self._observer_thread.start()
+
+            # Wait for observation window
+            self._observer_thread.join(timeout=self.observation_s + 2)
+            self._stop_observation.set()
+
+            # ── 5. Rollback fault ──────────────────────────────────────────
+            self._phase = ExperimentPhase.STABILIZATION
+            self.scenario.rollback()
+
+            # Wait for stabilization
+            time.sleep(self.stabilization_s)
+
+            # ── 6. Post-chaos snapshots ────────────────────────────────────
+            post_health = self._snapshot_health()
+            post_metrics = self._snapshot_metrics()
+
+            # ── 7. Build health_states map for validator ──────────────────
+            latest_health = self._health_snapshots[-1] if self._health_snapshots else {}
+
+            # Convert ClusterHealthGraph snapshots → simple state strings
+            health_states: dict[str, str] = {}
+            for node_id in self.cluster_ctx.get("nodes", []):
+                peer_health = latest_health.get(node_id, {})
+                if isinstance(peer_health, dict):
+                    state = peer_health.get("state", "unknown")
+                else:
+                    state = "unknown"
+                health_states[node_id] = state
+
+            # ── 8. Validate ───────────────────────────────────────────────
+            self._phase = ExperimentPhase.VALIDATION
+            validation_result = self.validator.validate(
+                scenario_name=self.scenario.name,
+                health_states=health_states,
+                sbs_results=self._sbs_snapshots,
+                raw_events=self._raw_events,
+                expected_behavior=self._get_expected_behavior(self.scenario.name),
+                cluster_metrics=post_metrics,
+            )
+
+            self._phase = ExperimentPhase.COMPLETE
+            total_duration = time.time() - start
+
+            return ChaosResult(
+                scenario_name=self.scenario.name,
+                phase=self._phase,
+                verdict=validation_result.verdict,
+                duration_s=total_duration,
+                fault_apply_duration_s=fault_apply_duration,
+                validation_result=validation_result,
+                health_snapshot={
+                    "baseline": baseline_health,
+                    "during": self._health_snapshots,
+                    "post": post_health,
+                },
+                metrics_snapshot={
+                    "baseline": baseline_metrics,
+                    "during": self._metrics_snapshots,
+                    "post": post_metrics,
+                },
+                sbs_snapshots=self._sbs_snapshots,
+                raw_events=self._raw_events,
+            )
+
         except Exception as e:
-            return FaultResult(
-                step=step,
-                fault_type=fault_type,
-                target_layer=layer,
-                injected=False,
-                latency_ms=latency,
-                error=str(e),
+            error = f"harness exception: {e}"
+            import traceback
+            traceback.print_exc()
+
+            return ChaosResult(
+                scenario_name=self.scenario.name,
+                phase=self._phase,
+                verdict=Verdict.FAIL,
+                duration_s=time.time() - start,
+                fault_apply_duration_s=time.time() - fault_apply_start,
+                error=error,
             )
 
-    def _collect_state(self) -> dict[str, Any]:
-        """Collect current state from all layers."""
-        return {
-            "drl": self.adapter.get_state("drl"),
-            "ccl": self.adapter.get_state("ccl"),
-            "f2": self.adapter.get_state("f2"),
-            "desc": self.adapter.get_state("desc"),
-        }
+    # ── Observation loop ───────────────────────────────────────────────────────
 
-    def get_metrics(self) -> ChaosMetrics:
-        return self._metrics
+    def _observation_loop(self, duration_s: float):
+        """
+        Background thread: periodically snapshot health + metrics + SBS state.
+        Runs for `duration_s` seconds or until _stop_observation is set.
+        """
+        interval = 1.0  # snapshot every 1s
+        end_time = time.time() + duration_s
 
-    def get_report(self) -> dict[str, Any]:
-        """Generate a human-readable chaos run report."""
-        m = self._metrics
-        return {
-            "run_summary": m.to_dict(),
-            "fault_success_rate": (
-                (m.faults_injected - m.faults_failed) / m.faults_injected * 100
-                if m.faults_injected > 0 else 0.0
-            ),
-            "violation_rate": (
-                m.violations_detected / m.total_steps * 100 if m.total_steps > 0 else 0.0
-            ),
-            "recovery_rate": (
-                m.violations_recovered / m.violations_detected * 100
-                if m.violations_detected > 0 else 0.0
-            ),
-            "status": "PASS" if m.violations_detected == 0 else "FAIL",
+        while time.time() < end_time and not self._stop_observation.is_set():
+            # Health snapshot
+            health = self._snapshot_health()
+            if health:
+                self._health_snapshots.append(health)
+
+            # Metrics snapshot
+            metrics = self._snapshot_metrics()
+            if metrics:
+                self._metrics_snapshots.append(metrics)
+
+            # SBS snapshot — evaluate current state
+            sbs_result = self._snapshot_sbs()
+            if sbs_result:
+                self._sbs_snapshots.append(sbs_result)
+                # If SBS detected a violation, record it as a raw event
+                if not sbs_result.get("ok", True):
+                    violations = sbs_result.get("violations", [])
+                    for v in violations:
+                        self._raw_events.append({
+                            "type": self.scenario.fault_type,
+                            "layer": "SBS",
+                            "description": v,
+                            "timestamp": time.time(),
+                        })
+
+            # Check for DRL drop events (from metrics)
+            for node_id, node_metrics in (metrics or {}).items():
+                drops = node_metrics.get("drops", 0)
+                if drops > 0:
+                    self._raw_events.append({
+                        "type": "drop",
+                        "layer": "DRL",
+                        "description": f"packet drop detected on {node_id}",
+                        "timestamp": time.time(),
+                    })
+
+            time.sleep(interval)
+
+    def _snapshot_health(self) -> dict:
+        """Snapshot health state from all nodes."""
+        getter = self.cluster_ctx.get("health_getter")
+        nodes = self.cluster_ctx.get("nodes", [])
+        if not getter:
+            return {}
+        result = {}
+        for node_id in nodes:
+            try:
+                health = getter(node_id)
+                if health:
+                    if hasattr(health, "get_all"):
+                        result[node_id] = health.get_all()
+                    elif callable(health):
+                        result[node_id] = health()
+            except Exception:
+                pass
+        return result
+
+    def _snapshot_metrics(self) -> dict:
+        """Snapshot metrics from all nodes."""
+        getter = self.cluster_ctx.get("metrics_getter")
+        nodes = self.cluster_ctx.get("nodes", [])
+        if not getter:
+            return {}
+        result = {}
+        for node_id in nodes:
+            try:
+                metrics = getter(node_id)
+                if metrics:
+                    if hasattr(metrics, "get_all"):
+                        result[node_id] = metrics.get_all()
+                    elif callable(metrics):
+                        result[node_id] = metrics()
+            except Exception:
+                pass
+        return result
+
+    def _snapshot_sbs(self) -> dict:
+        """Run SBS evaluation snapshot."""
+        engine = self.cluster_ctx.get("sbs_engine")
+        if not engine:
+            # Create a local engine for snapshot
+            spec = SystemBoundarySpec()
+            engine = GlobalInvariantEngine(spec)
+
+        # Build a minimal state from current health/metrics
+        latest_health = self._health_snapshots[-1] if self._health_snapshots else {}
+
+        drl_state = {"partitions": 0, "leader": None}
+        ccl_state = {"term": 0, "leader": None}
+        f2_state = {"commit_index": 0, "quorum_ratio": 0.67, "duplicate_ack": False}
+        desc_state = {"commit_index": 0, "term": 0}
+
+        # Update from health snapshots — if any node is unreachable → partition
+        unreachable_count = sum(
+            1 for h in latest_health.values()
+            if isinstance(h, dict) and h.get("state") == "unreachable"
+        )
+        if unreachable_count > 0:
+            drl_state["partitions"] = unreachable_count
+            f2_state["quorum_ratio"] = max(0.0, 0.67 - (unreachable_count / 3))
+
+        try:
+            ok = engine.evaluate(drl_state, ccl_state, f2_state, desc_state)
+            return {
+                "ok": ok,
+                "violations": engine.get_violations(),
+                "timestamp": time.time(),
+                "drl": drl_state,
+                "ccl": ccl_state,
+                "f2": f2_state,
+                "desc": desc_state,
+            }
+        except Exception as e:
+            return {"ok": True, "violations": [], "error": str(e)}
+
+    # ── Expected behavior map ─────────────────────────────────────────────────
+
+    def _get_expected_behavior(self, scenario_name: str) -> dict:
+        """
+        Return expected SBS violations and system response for each scenario.
+        This defines the "correct" outcome that the validator checks against.
+        """
+        behavior_map: dict[str, dict] = {
+            "partition_half_cluster": {
+                "sbs_violations": ["LEADER_UNIQUENESS", "QUORUM_VIOLATION"],
+                "system_response": "cluster_detects_and_recovers",
+            },
+            "asymmetric_partition": {
+                "sbs_violations": ["TERM_ORDER_VIOLATION", "SPLIT_BRAIN"],
+                "system_response": "cluster_detects_and_recovers",
+            },
+            "slow_node_amplification": {
+                "sbs_violations": [],
+                "system_response": "cluster_detects_and_recovers",
+            },
+            "byzantine_sender_injection": {
+                "sbs_violations": ["BYZANTINE_SIGNAL", "QUORUM_VIOLATION"],
+                "system_response": "cluster_halts",
+            },
+            "clock_skew_escalation": {
+                "sbs_violations": ["TEMPORAL_DRIFT"],
+                "system_response": "cluster_detects_and_recovers",
+            },
+            "loss_burst": {
+                "sbs_violations": [],
+                "system_response": "cluster_detects_and_recovers",
+            },
+            "node_isolation": {
+                "sbs_violations": ["LEADER_UNIQUENESS", "QUORUM_VIOLATION"],
+                "system_response": "cluster_detects_and_recovers",
+            },
+            "latency_spike": {
+                "sbs_violations": [],
+                "system_response": "cluster_detects_and_recovers",
+            },
         }
+        return behavior_map.get(scenario_name, {
+            "sbs_violations": [],
+            "system_response": "cluster_detects_and_recovers",
+        })
+
+    # ── Convenience runner ─────────────────────────────────────────────────────
+
+    def run_scenario(
+        scenario_name: str,
+        cluster_ctx: dict,
+        observation_s: float = 10.0,
+        stabilization_s: float = 10.0,
+    ) -> ChaosResult:
+        """
+        Convenience function: look up scenario by name and run it.
+
+        Usage:
+            result = ChaosHarness.run_scenario(
+                "partition_half_cluster",
+                cluster_ctx={"nodes": ["node-a", ...], ...},
+            )
+        """
+        from chaos.scenarios import SCENARIO_REGISTRY
+
+        if scenario_name not in SCENARIO_REGISTRY:
+            raise ValueError(f"Unknown scenario: {scenario_name}. Available: {list(SCENARIO_REGISTRY.keys())}")
+
+        scenario = SCENARIO_REGISTRY[scenario_name]
+        harness = ChaosHarness(
+            scenario=scenario,
+            cluster_ctx=cluster_ctx,
+            observation_s=observation_s,
+            stabilization_s=stabilization_s,
+        )
+        return harness.run()

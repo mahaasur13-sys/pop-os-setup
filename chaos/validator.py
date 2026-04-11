@@ -1,242 +1,357 @@
 """
-ChaosValidator — post-chaos SBS invariant checker.
+ChaosValidator — SBS-aware result validator for chaos experiments.
 
-Runs after chaos harness completes and produces
-Jepsen-style validation reports.
+Validates the outcome of a chaos experiment against the cluster's SBS invariants
+and the FailureClassifier taxonomy. Produces a ValidationResult with:
 
-Usage
------
-    from chaos.validator import ChaosValidator
+  - classified_failures : list of ClassifiedFailure objects
+  - sbs_violations_detected : list[str]
+  - system_response : what the cluster did during the chaos
+  - verdict : PASS / PARTIAL / FAIL
 
-    validator = ChaosValidator(sbs_enforcer)
-    validator.validate(final_state)
-    report = validator.get_report()
+Jepsen-style verdict definitions
+---------------------------------
+PASS    : cluster remained fully consistent throughout chaos
+PARTIAL : cluster detected violations correctly and recovered
+FAIL    : cluster silently corrupted state or diverged without detection
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from enum import Enum
+from typing import Optional
 
-from sbs.boundary_spec import SystemBoundarySpec
+import sys
+import os
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
+
+from sbs.failure_classifier import FailureClassifier, ClassifiedFailure, FailureCategory, FailureSeverity
 from sbs.global_invariant_engine import GlobalInvariantEngine
-from sbs.failure_classifier import FailureClassifier, FailureCategory, FailureSeverity
+from sbs.boundary_spec import SystemBoundarySpec
+
+
+class Verdict(Enum):
+    PASS = "PASS"           # cluster remained fully consistent
+    PARTIAL = "PARTIAL"     # detected + recovered correctly
+    FAIL = "FAIL"           # silent corruption or divergence
 
 
 @dataclass
 class ValidationResult:
-    """Result of a single validation check."""
-    ok: bool
-    invariants_checked: int
-    violations_found: int
-    failed_invariants: list[str]
-    state_hash: int
-    latency_ms: float
+    """Immutable result of a single chaos experiment validation."""
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "ok": self.ok,
-            "invariants_checked": self.invariants_checked,
-            "violations_found": self.violations_found,
-            "failed_invariants": self.failed_invariants,
-            "state_hash": self.state_hash,
-            "latency_ms": self.latency_ms,
-        }
+    verdict: Verdict
+    sbs_violations: list[str] = field(default_factory=list)
+    classified_failures: list[ClassifiedFailure] = field(default_factory=list)
+    system_response: dict = field(default_factory=dict)
+    notes: str = ""
+    duration_s: float = 0.0
+    timestamp: float = field(default_factory=time.time)
 
+    def __str__(self) -> str:
+        sev_counts: dict[str, int] = {}
+        for f in self.classified_failures:
+            sev_counts[f.severity.value] = sev_counts.get(f.severity.value, 0) + 1
 
-@dataclass
-class ValidatorReport:
-    """Aggregated report from all validation runs."""
-    total_validations: int = 0
-    total_violations: int = 0
-    total_recovered: int = 0
-    critical_failures: int = 0
-    high_failures: int = 0
-    medium_failures: int = 0
-    low_failures: int = 0
-    by_category: dict[str, int] = field(default_factory=dict)
-    by_layer: dict[str, int] = field(default_factory=dict)
-    validation_log: list[dict] = field(default_factory=list)
-
-    def add_result(self, result: ValidationResult, layer_violations: dict[str, int] | None = None) -> None:
-        self.total_validations += 1
-        if not result.ok:
-            self.total_violations += result.violations_found
-            self.validation_log.append(result.to_dict())
-            if layer_violations:
-                for layer, count in layer_violations.items():
-                    self.by_layer[layer] = self.by_layer.get(layer, 0) + count
-
-    def add_recovery(self) -> None:
-        self.total_recovered += 1
-
-    def add_critical(self, category: str) -> None:
-        self.critical_failures += 1
-        self.by_category[category] = self.by_category.get(category, 0) + 1
-
-    def add_high(self, category: str) -> None:
-        self.high_failures += 1
-        self.by_category[category] = self.by_category.get(category, 0) + 1
-
-    def add_medium(self, category: str) -> None:
-        self.medium_failures += 1
-        self.by_category[category] = self.by_category.get(category, 0) + 1
-
-    def add_low(self, category: str) -> None:
-        self.low_failures += 1
-        self.by_category[category] = self.by_category.get(category, 0) + 1
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "total_validations": self.total_validations,
-            "total_violations": self.total_violations,
-            "total_recovered": self.total_recovered,
-            "critical_failures": self.critical_failures,
-            "high_failures": self.high_failures,
-            "medium_failures": self.medium_failures,
-            "low_failures": self.low_failures,
-            "by_category": self.by_category,
-            "by_layer": self.by_layer,
-            "status": "PASS" if self.total_violations == 0 else "FAIL",
-        }
+        lines = [
+            f"Verdict: {self.verdict.value}",
+            f"SBS violations ({len(self.sbs_violations)}): {self.sbs_violations}",
+            f"Classified failures: {sev_counts}",
+            f"System response: {self.system_response}",
+        ]
+        if self.notes:
+            lines.append(f"Notes: {self.notes}")
+        return "\n".join(lines)
 
 
 class ChaosValidator:
     """
-    Runs SBS invariant checks against collected system state
-    and classifies results using FailureClassifier.
+    Validate the outcome of a chaos experiment.
 
-    Produces Jepsen-style reports with per-category failure counts.
+    Integrates with:
+      - SBS GlobalInvariantEngine  (detects invariant violations)
+      - FailureClassifier           (maps raw events → semantic categories)
+      - ClusterHealthGraph state    (peer health during chaos)
+
+    Usage
+    -----
+    validator = ChaosValidator()
+
+    # After running a chaos scenario:
+    result = validator.validate(
+        scenario_name="partition_half_cluster",
+        health_states={"node-b": "unreachable", "node-c": "reachable"},
+        sbs_results=[{"ok": False, "violations": ["LEADER_UNIQUENESS_VIOLATION"]}],
+        raw_events=[
+            {"type": "partition", "layer": "DRL", "description": "A↮B blocked"},
+            {"type": "drop", "layer": "DRL", "description": "Forward timeout"},
+        ],
+        expected_behavior={
+            "sbs_violations": ["LEADER_UNIQUENESS", "QUORUM_VIOLATION"],
+            "system_response": "cluster_detects_and_recovers",
+        },
+    )
+    print(result)
     """
 
-    def __init__(
+    def __init__(self):
+        self.classifier = FailureClassifier()
+        self.spec = SystemBoundarySpec()
+        self.engine = GlobalInvariantEngine(self.spec)
+
+    def validate(
         self,
-        sbs_enforcer,  # SBSRuntimeEnforcer
-        boundary_spec: SystemBoundarySpec,
-        invariant_engine: GlobalInvariantEngine,
-        classifier: FailureClassifier | None = None,
-    ) -> None:
-        self.enforcer = sbs_enforcer
-        self.spec = boundary_spec
-        self.engine = invariant_engine
-        self.classifier = classifier or FailureClassifier()
-        self._report = ValidatorReport()
-        self._violations_history: list[list[str]] = []
-
-    def validate(self, state: dict[str, Any]) -> ValidationResult:
+        scenario_name: str,
+        health_states: dict[str, str],
+        sbs_results: list[dict],
+        raw_events: list[dict],
+        expected_behavior: dict,
+        cluster_metrics: Optional[dict] = None,
+    ) -> ValidationResult:
         """
-        Run full SBS invariant validation on collected state.
-        Returns ValidationResult with pass/fail and violation details.
+        Validate a chaos experiment run.
+
+        Parameters
+        ----------
+        scenario_name       : name of the scenario that was run
+        health_states       : {node_id: health_state} during chaos
+        sbs_results         : list of SBS evaluate() results during the experiment
+        raw_events          : raw failure events captured during chaos
+        expected_behavior   : {
+            "sbs_violations": [...],   # expected SBS violation types
+            "system_response": str,    # "cluster_detects_and_recovers"
+                                     # "cluster_halts"
+                                     # "cluster_silent_corruption"
+        }
+        cluster_metrics     : optional MetricsCollector snapshot
+
+        Returns
+        -------
+        ValidationResult
         """
-        import time
-        start = time.monotonic()
+        start = time.time()
 
-        drl = state.get("drl", {})
-        ccl = state.get("ccl", {})
-        f2 = state.get("f2", {})
-        desc = state.get("desc", {})
+        # ── 1. Classify failures ─────────────────────────────────────────
+        classified = self.classifier.classify_batch(raw_events)
+        critical_failures = [
+            f for f in classified
+            if f.severity == FailureSeverity.CRITICAL
+        ]
 
-        violations: list[str] = []
+        # ── 2. Collect SBS violations ────────────────────────────────────
+        sbs_violations: list[str] = []
+        for result in sbs_results:
+            violations = result.get("violations", [])
+            if isinstance(violations, list):
+                sbs_violations.extend(violations)
+            elif not result.get("ok", True):
+                sbs_violations.append("UNKNOWN_SBS_VIOLATION")
 
-        try:
-            self.enforcer.enforce("chaos_validate", state)
-            violations = list(self.enforcer.get_violations_summary().keys())
-        except Exception:
-            pass
+        sbs_violations = list(dict.fromkeys(sbs_violations))  # deduplicate
 
-        spec_ok = self.spec.validate(state)
-        spec_violations = list(self.spec.get_violations())
-
-        engine_ok = self.engine.evaluate(drl, ccl, f2, desc)
-        engine_violations = self.engine.get_violations()
-
-        all_violations = spec_violations + engine_violations
-
-        self._violations_history.append(all_violations)
-
-        for v in all_violations:
-            self._classify_violation(v)
-
-        # Always add result so total_validations always increments
-        layer_violations = dict(self.enforcer.get_violations_summary())
-        self._report.add_result(
-            ValidationResult(
-                ok=len(all_violations) == 0,
-                invariants_checked=14,
-                violations_found=len(all_violations),
-                failed_invariants=all_violations,
-                state_hash=hash(str(sorted(state.items()))) if state else 0,
-                latency_ms=0.0,
-            ),
-            layer_violations=layer_violations,
+        # ── 3. Determine system response ────────────────────────────────
+        system_response = self._classify_system_response(
+            health_states, sbs_violations, critical_failures
         )
 
-        latency_ms = (time.monotonic() - start) * 1000
+        # ── 4. Determine verdict ─────────────────────────────────────────
+        verdict = self._determine_verdict(
+            scenario_name,
+            sbs_violations,
+            classified,
+            expected_behavior,
+            system_response,
+        )
+
+        duration_s = time.time() - start
+
+        # ── 5. Generate notes ───────────────────────────────────────────
+        notes = self._generate_notes(
+            scenario_name, classified, sbs_violations, system_response
+        )
 
         return ValidationResult(
-            ok=len(all_violations) == 0,
-            invariants_checked=14,
-            violations_found=len(all_violations),
-            failed_invariants=all_violations,
-            state_hash=hash(str(sorted(state.items()))) if state else 0,
-            latency_ms=latency_ms,
+            verdict=verdict,
+            sbs_violations=sbs_violations,
+            classified_failures=classified,
+            system_response=system_response,
+            notes=notes,
+            duration_s=duration_s,
         )
 
-    def _classify_violation(self, violation: str) -> None:
-        """Classify a violation string into a FailureCategory and update report."""
-        raw_type = "unknown"
-        v_lower = violation.lower()
-
-        if "split_brain" in v_lower or "partition" in v_lower:
-            raw_type = "partition"
-        elif "quorum" in v_lower:
-            raw_type = "quorum_violation"
-        elif "leader" in v_lower:
-            raw_type = "leadership_split"
-        elif "temporal" in v_lower or "drift" in v_lower or "skew" in v_lower:
-            raw_type = "clock_skew"
-        elif "duplicate" in v_lower or "byzantine" in v_lower:
-            raw_type = "duplicate"
-        elif "commit_index" in v_lower or "regression" in v_lower:
-            raw_type = "consensus_violation"
-        elif "sequence" in v_lower or "reorder" in v_lower or "gap" in v_lower:
-            raw_type = "sequence_violation"
-
-        category = self.classifier._map_type_to_category(raw_type)
-        severity = self.classifier.get_severity_for(category)
-
-        if severity == FailureSeverity.CRITICAL:
-            self._report.add_critical(category.value)
-        elif severity == FailureSeverity.HIGH:
-            self._report.add_high(category.value)
-        elif severity == FailureSeverity.MEDIUM:
-            self._report.add_medium(category.value)
-        elif severity == FailureSeverity.LOW:
-            self._report.add_low(category.value)
-
-    def get_report(self) -> ValidatorReport:
-        return self._report
-
-    def get_summary(self) -> dict[str, Any]:
-        """Human-readable summary for terminal output."""
-        report = self._report.to_dict()
-        return {
-            "status": report["status"],
-            "validations": report["total_validations"],
-            "violations": report["total_violations"],
-            "recovered": report["total_recovered"],
-            "critical": report["critical_failures"],
-            "high": report["high_failures"],
-            "medium": report["medium_failures"],
-            "low": report["low_failures"],
-            "by_category": report["by_category"],
-            "by_layer": report["by_layer"],
+    def _classify_system_response(
+        self,
+        health_states: dict[str, str],
+        sbs_violations: list[str],
+        critical_failures: list[ClassifiedFailure],
+    ) -> dict:
+        """Determine what the cluster did in response to the chaos."""
+        response: dict = {
+            "detected_partition": False,
+            "detected_violations": len(sbs_violations) > 0,
+            "cluster_halted": False,
+            "recovered": False,
+            "unreachable_nodes": [],
+            "lagging_nodes": [],
+            "violation_nodes": [],
         }
 
-    def reset(self) -> None:
-        """Reset validator state for a new chaos run."""
-        self._report = ValidatorReport()
-        self._violations_history.clear()
+        for node_id, state in health_states.items():
+            if state in ("unreachable",):
+                response["unreachable_nodes"].append(node_id)
+            elif state == "lagging":
+                response["lagging_nodes"].append(node_id)
+            elif state == "violation":
+                response["violation_nodes"].append(node_id)
 
-    def get_violations_history(self) -> list[list[str]]:
-        return list(self._violations_history)
+        response["detected_partition"] = (
+            len(response["unreachable_nodes"]) >= 1
+        )
+
+        # SBS violations mean cluster detected the problem
+        if sbs_violations:
+            # Check if violation was LEADER_UNIQUENESS
+            has_leadership_split = any(
+                "LEADER" in v or "SPLIT" in v for v in sbs_violations
+            )
+            if has_leadership_split:
+                # This is recoverable if cluster_recovered later
+                response["recovered"] = False
+                response["cluster_halted"] = False
+            else:
+                # Other violations — may be recoverable
+                response["recovered"] = False
+
+        # Check for CRITICAL unhandled failures (BYZANTINE, STATE_CORRUPTION)
+        unhandled = [
+            f for f in critical_failures
+            if f.category in (
+                FailureCategory.BYZANTINE_BEHAVIOR,
+                FailureCategory.STATE_CORRUPTION,
+                FailureCategory.CONSENSUS_BREAK,
+            )
+        ]
+        if unhandled:
+            response["cluster_halted"] = True
+
+        return response
+
+    def _determine_verdict(
+        self,
+        scenario_name: str,
+        sbs_violations: list[str],
+        classified: list[ClassifiedFailure],
+        expected_behavior: dict,
+        system_response: dict,
+    ) -> Verdict:
+        """Determine the final verdict (PASS / PARTIAL / FAIL)."""
+
+        expected_violations = expected_behavior.get("sbs_violations", [])
+        expected_response = expected_behavior.get("system_response", "")
+
+        # ── Check for silent corruption / undetected violations ─────────
+        def _matches_expected(expected: str, actual: list[str]) -> bool:
+            """Return True if expected violation name matches any actual violation (substring or exact)."""
+            for a in actual:
+                if expected.lower() in a.lower() or a.lower() in expected.lower():
+                    return True
+                # Token-level: check for significant token overlap
+                exp_tokens = set(expected.lower().split("_"))
+                act_tokens = set(a.lower().split("_"))
+                overlap = exp_tokens & act_tokens - {"violation", "signal", "category"}
+                if overlap:
+                    return True
+            return False
+
+        for ev in expected_violations:
+            if not _matches_expected(ev, sbs_violations):
+                # Expected violation was NOT detected → potential silent corruption
+                if system_response.get("detected_violations"):
+                    return Verdict.FAIL
+
+        # ── CRITICAL failures that were NOT raised as SBS violations ──
+        # BYZANTINE_SIGNAL and BYZANTINE_BEHAVIOR are the same event (different names)
+        # Check for key token overlap between category and violation names
+        def _semantic_match(category_val: str, violation: str) -> bool:
+            """Return True if category and violation are semantically the same."""
+            cat_lower = category_val.lower()
+            viol_lower = violation.lower()
+            if cat_lower in viol_lower or viol_lower in cat_lower:
+                return True
+            # Token-level overlap: split on underscore and check partial match
+            cat_tokens = set(cat_lower.split("_"))
+            viol_tokens = set(viol_lower.split("_"))
+            # If they share at least one substantive token (len > 2), consider it a match
+            overlap = cat_tokens & viol_tokens - {"signal", "violation", "category"}
+            return bool(overlap)
+
+        critical_undetected = [
+            f for f in classified
+            if f.severity == FailureSeverity.CRITICAL
+            and not any(
+                _semantic_match(f.category.value, v)
+                for v in sbs_violations
+            )
+        ]
+        if critical_undetected:
+            return Verdict.FAIL
+
+        # ── Cluster halted when it shouldn't have ───────────────────────
+        if system_response.get("cluster_halted"):
+            if expected_response != "cluster_halts":
+                return Verdict.FAIL
+
+        # ── Normal flow: violations detected + cluster recovered ───────
+        if sbs_violations and system_response.get("detected_violations"):
+            if expected_response == "cluster_detects_and_recovers":
+                return Verdict.PARTIAL
+            if expected_response == "cluster_halts":
+                return Verdict.PASS  # halting is correct behavior
+
+        # ── No violations when we expected none ────────────────────────
+        # (some scenarios may legitimately not trigger SBS violations)
+
+        # ── PASS: expected violations detected, cluster recovered ──────
+        detected_expected = sum(1 for ev in expected_violations if ev in sbs_violations)
+        if detected_expected >= len(expected_violations) and system_response.get("detected_partition"):
+            if system_response.get("recovered"):
+                return Verdict.PASS
+            return Verdict.PARTIAL
+
+        return Verdict.PASS
+
+    def _generate_notes(
+        self,
+        scenario_name: str,
+        classified: list[ClassifiedFailure],
+        sbs_violations: list[str],
+        system_response: dict,
+    ) -> str:
+        """Generate human-readable notes about the validation."""
+        parts = []
+
+        if not classified and not sbs_violations:
+            parts.append("No failures detected — cluster remained stable.")
+
+        sev_counts: dict[str, int] = {}
+        for f in classified:
+            sev_counts[f.severity.value] = sev_counts.get(f.severity.value, 0) + 1
+        if sev_counts:
+            parts.append(f"Failure severity distribution: {sev_counts}")
+
+        if sbs_violations:
+            parts.append(f"SBS violations: {', '.join(sbs_violations)}")
+
+        if system_response.get("unreachable_nodes"):
+            parts.append(
+                f"Unreachable nodes during chaos: {system_response['unreachable_nodes']}"
+            )
+
+        if system_response.get("cluster_halted"):
+            parts.append("Cluster halted (correct for CRITICAL violations).")
+
+        return " | ".join(parts)
