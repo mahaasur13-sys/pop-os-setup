@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atom-federation-os"
+version = "0.5.1"
+description = "ATOMFederationOS — distributed execution OS stack (DRL + CCL + F2 + DESC + SBS)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "asurdev", email = "mahaasur13@gmail.com" }
+]
+keywords = ["distributed-systems", "consensus", "fault-tolerance", "atom", "federation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Distributed Computing",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "ruff>=0.3",
+    "hypothesis>=6.90",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["sbs/tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+select = ["E", "F", "I", "N", "W", "RUF"]
+ignore = ["RUF001"]
+
+[tool.coverage.run]
+source = ["sbs"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:", "raise NotImplementedError"]
