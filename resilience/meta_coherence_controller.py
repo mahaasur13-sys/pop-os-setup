@@ -1,60 +1,40 @@
-"""
-v6.7 — Meta-Coherence Controller
-
-The master controller that wires v6.7 components into a coherent control layer:
-
-  ModelRealityAligner      → validates self_model vs real cluster
-  EigenstateDetector       → finds stable attractors + predicts transitions
-  ObjectiveStabilityGovernor → prevents J-gate oscillation
-  ComputeBudgetController  → bounds compute overhead
-
-And closes the final loop:
-  model ↔ reality ↔ objective ↔ execution
-
-Usage:
-  mc = MetaCoherenceController()
-  mc.begin_tick()
-  decision = mc.tick(...)
-"""
+"""v6.8 — Meta-Coherence Controller."""
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from resilience.self_model import SystemState, NodeRole
 from resilience.decision_lattice import DecisionLattice, LatticeDecision
-from resilience.predictive_controller import PredictiveController, PredictiveTickResult
-from resilience.model_reality_aligner import (
-    ModelRealityAligner,
-    AlignmentSnapshot,
-    DriftStatus,
-)
-from resilience.eigenstate_detector import (
-    EigenstateDetector,
-    EigenstateSnapshot,
-    Eigenstate,
-    EigenstateType,
-)
+from resilience.predictive_controller import PredictiveController
+from resilience.model_reality_aligner import ModelRealityAligner, AlignmentSnapshot
+from resilience.eigenstate_detector import EigenstateDetector, EigenstateSnapshot
 from resilience.objective_stability_governor import (
-    ObjectiveStabilityGovernor,
-    GovernorMode,
-    GovernorDecision,
+    ObjectiveStabilityGovernor, GovernorMode, GovernorDecision,
 )
 from resilience.compute_budget_controller import (
-    ComputeBudgetController,
-    Subsystem,
-    BudgetDecision,
+    ComputeBudgetController, Subsystem, BudgetDecision,
 )
 from resilience.closed_loop import ClosedLoopResilienceController
-from resilience.predictive_controller import PredictiveController
 from resilience.optimizer import SystemOptimizer, OptimizationResult
+
+# v6.8 coherence layer
+from coherence.drift_controller import DriftController
+from coherence.temporal_smoother import TemporalCoherenceSmoother, SmootherSnapshot
+from coherence.objective_stabilizer import GlobalObjectiveStabilizer, StabilizerSnapshot
+from coherence.invariant import SystemCoherenceInvariant, CoherenceViolation
+
+try:
+    from resilience.compute_budget_controller import ComputeBudgetSnapshot
+except ImportError:
+    ComputeBudgetSnapshot = object
 
 
 @dataclass
 class CoherenceMetrics:
-    coherence_score: float           # 0..1, model ↔ reality alignment
+    coherence_score: float
     model_version: int
     current_eigenstate_id: Optional[str]
     eigenstate_type: Optional[str]
@@ -66,6 +46,10 @@ class CoherenceMetrics:
     drift_status: str
     eigenstate_transition_pending: bool
     total_coherence_loops: int
+    drift_score: float = 0.0
+    lattice_oscillation_strength: float = 0.0
+    trajectory_ok: bool = True
+    sci_violated: bool = False
 
 
 @dataclass
@@ -79,28 +63,27 @@ class MetaCoherenceSnapshot:
     compute: ComputeBudgetSnapshot
     raw_decision: Optional[LatticeDecision]
     final_action: Optional[str]
+    drift_snap: Optional[object] = None
+    smoother_snap: Optional[SmootherSnapshot] = None
+    stabilizer_snap: Optional[StabilizerSnapshot] = None
 
 
 class MetaCoherenceController:
-    """
-    Master v6.7 controller.
+    """Master v6.8 controller — adds GLOBAL COHERENCE ENGINE.
 
     Tick flow:
-      1. begin_tick() → budget controller starts accounting
-      2.感知 → self_model + aligner observe reality
-      3. eigenstate detection → find current basin
-      4. PredictiveController → forecast 30s stability
-      5. SystemOptimizer.compute_J() → evaluate objective
-      6. ObjectiveStabilityGovernor → damp oscillation
-      7. DecisionLattice → formal arbitration
-      8. end_tick() → budget accounting closes
-
-    Closes the final gap:
-      model (self_model) ↔ reality (observed cluster state)
-                            ↕
-                        objective (J)
-                            ↕
-                       execution (lattice decision)
+      1. begin_tick()
+      2. ModelRealityAligner.observe()
+      3. DriftController.observe()           # v6.8
+      4. TemporalCoherenceSmoother.ingest() # v6.8
+      5. EigenstateDetector.detect_current()
+      6. PredictiveController.tick()
+      7. SystemOptimizer.compute_J() + Governor
+      8. DecisionLattice.decide()
+      9. TemporalCoherenceSmoother.smooth() # v6.8
+     10. GlobalObjectiveStabilizer.compute_J() # v6.8
+     11. SystemCoherenceInvariant.check()    # v6.8 HARD GATE
+     12. end_tick()
     """
 
     def __init__(
@@ -108,6 +91,11 @@ class MetaCoherenceController:
         cluster_nodes: int = 5,
         tick_budget_ms: float = 50.0,
         governor_mode: GovernorMode = GovernorMode.DAMPED,
+        sci_fail_fast: bool = True,
+        drift_threshold: float = 0.15,
+        stabilizer_alpha: float = 0.50,
+        stabilizer_beta: float = 0.30,
+        stabilizer_gamma: float = 0.20,
     ):
         self.aligner = ModelRealityAligner()
         self.eigenstate_detector = EigenstateDetector(n_features=8, learning_window=200)
@@ -122,10 +110,26 @@ class MetaCoherenceController:
         self.optimizer = SystemOptimizer()
         self.lattice = DecisionLattice()
 
+        # v6.8 GLOBAL COHERENCE ENGINE
+        self.drift_ctrl = DriftController(drift_threshold=drift_threshold)
+        self.smoother = TemporalCoherenceSmoother(base_window=5, max_window=30)
+        self.stabilizer = GlobalObjectiveStabilizer(
+            alpha=stabilizer_alpha,
+            beta=stabilizer_beta,
+            gamma=stabilizer_gamma,
+            trajectory_tolerance=0.05,
+            trajectory_window=10,
+            optimizer=self.optimizer,
+        )
+        self.sci = SystemCoherenceInvariant(fail_fast=sci_fail_fast)
+        self.sci.begin_window()
+
         self._tick_count = 0
-        self._state_buffer: list[dict[str, float]] = []
         self._last_snapshot: Optional[MetaCoherenceSnapshot] = None
         self._previous_J = 0.5
+        self._drl_drop_rate = 0.0
+        self._latency_history_ms = [10.0]
+        self._violation_count = 0
 
     def begin_tick(self) -> None:
         self.compute.begin_tick()
@@ -136,17 +140,38 @@ class MetaCoherenceController:
         observed_state: dict,
         predicted_state: dict,
         node_roles: dict[str, NodeRole],
+        drl_drop_rate: float = 0.0,
+        latency_ms: float = 10.0,
+        violation_count: int = 0,
     ) -> MetaCoherenceSnapshot:
         now = time.time()
 
-        # 1. Alignment: self_model vs reality
+        # 1. Alignment
         self.compute.enter_subsystem(Subsystem.MODEL_ALIGNER)
         t0 = time.monotonic()
         alignment = self.aligner.observe(observed_state, predicted_state)
         elapsed = (time.monotonic() - t0) * 1000.0
         self.compute.exit_subsystem(Subsystem.MODEL_ALIGNER, elapsed)
 
-        # 2. Eigenstate detection
+        # 2. v6.8: DriftController
+        drift_snap = self.drift_ctrl.observe(observed_state, predicted_state)
+
+        # Update DRL metrics for smoother
+        self._drl_drop_rate = drl_drop_rate
+        self._latency_history_ms.append(latency_ms)
+        if len(self._latency_history_ms) > 20:
+            self._latency_history_ms = self._latency_history_ms[-20:]
+        self._violation_count = violation_count
+
+        # 3. v6.8: TemporalCoherenceSmoother ingest
+        self.smoother.ingest(
+            drl_drop_rate=self._drl_drop_rate,
+            latency_ms=latency_ms,
+            latency_history_ms=self._latency_history_ms,
+            violation_count=self._violation_count,
+        )
+
+        # 4. Eigenstate detection
         self.eigenstate_detector.ingest(observed_state)
         self.compute.enter_subsystem(Subsystem.EIGENSTATE_DETECTOR)
         t0 = time.monotonic()
@@ -154,7 +179,7 @@ class MetaCoherenceController:
         elapsed = (time.monotonic() - t0) * 1000.0
         self.compute.exit_subsystem(Subsystem.EIGENSTATE_DETECTOR, elapsed)
 
-        # 3. Predictive forecast
+        # 5. Predictive forecast
         self.compute.enter_subsystem(Subsystem.PREDICTIVE_CONTROLLER)
         adaptive_horizon = self.compute.get_adaptive_horizon(30.0, Subsystem.PREDICTIVE_CONTROLLER)
         self.predictive.forecast_horizon = adaptive_horizon
@@ -167,11 +192,11 @@ class MetaCoherenceController:
             leader_count=1,
             node_roles=node_roles,
         )
-        forecast = self.predictive.tick()
+        self.predictive.tick()
         elapsed = (time.monotonic() - t0) * 1000.0
         self.compute.exit_subsystem(Subsystem.PREDICTIVE_CONTROLLER, elapsed)
 
-        # 4. J computation via optimizer
+        # 6. J computation
         self.compute.enter_subsystem(Subsystem.GOVERNORS)
         t0 = time.monotonic()
         try:
@@ -180,13 +205,12 @@ class MetaCoherenceController:
             J_raw = J_result.J
         except Exception:
             J_raw = self._previous_J
-        J_governed = J_raw  # initial, may be adjusted by governor
         governor_decision = self.governor.evaluate(J_raw, confidence=0.8)
         elapsed = (time.monotonic() - t0) * 1000.0
         self.compute.exit_subsystem(Subsystem.GOVERNORS, elapsed)
         self._previous_J = J_raw
 
-        # 5. Decision lattice
+        # 7. Decision lattice
         self.compute.enter_subsystem(Subsystem.DECISION_LATTICE)
         t0 = time.monotonic()
         full_state = SystemState(
@@ -200,37 +224,81 @@ class MetaCoherenceController:
         raw_decision = self.lattice.decide(full_state)
         elapsed = (time.monotonic() - t0) * 1000.0
         prune_happened = self.compute.should_prune(Subsystem.DECISION_LATTICE, raw_decision.branch_count)
-        self.compute.exit_subsystem(
-            Subsystem.DECISION_LATTICE,
-            elapsed,
-            nodes_visited=raw_decision.branch_count,
-            pruned=prune_happened,
+        self.compute.exit_subsystem(Subsystem.DECISION_LATTICE, elapsed,
+                                   nodes_visited=raw_decision.branch_count, pruned=prune_happened)
+
+        # 8. v6.8: TemporalCoherenceSmoother — EMA smoothing
+        smoother_snap = self.smoother.smooth(raw_decision.primary_action.name)
+        final_action_name = (
+            smoother_snap.smoothed_action
+            if smoother_snap.oscillation_strength > 0.3
+            else raw_decision.primary_action.name
         )
 
-        # 6. Final action gating
-        final_allowed = governor_decision.allowed and J_raw > 0.0
-        final_action = raw_decision.primary_action.name if final_allowed else "BLOCKED"
-
-        # 7. Coherence score
-        coherence = self._compute_coherence(
-            alignment.drift_score,
-            eigenstate_snap.trajectory_variance,
-            governor_decision.oscillation_report.amplitude if governor_decision.oscillation_report else 0.0,
+        # 9. v6.8: GlobalObjectiveStabilizer — J_new formula
+        stability_score = 1.0 - drift_snap.drift_score
+        consistency_score = smoother_snap.lattice_stability_score
+        control_cost = self.compute.snapshot().utilization_pct / 100.0
+        stabilizer_snap = self.stabilizer.compute_J(
+            stability_score=stability_score,
+            consistency_score=consistency_score,
+            control_cost=control_cost,
+            J_compat=J_raw,
         )
+
+        # 10. v6.8: SystemCoherenceInvariant — HARD GATE
+        sci_violated = False
+        osc_amp = (governor_decision.oscillation_report.amplitude
+                   if governor_decision.oscillation_report else 0.0)
+        try:
+            self.sci.check(
+                drift_score=drift_snap.drift_score,
+                lattice_divergence=smoother_snap.oscillation_strength,
+                oscillation_strength=smoother_snap.oscillation_strength,
+                coherence_score=self._compute_coherence(
+                    alignment.drift_score,
+                    eigenstate_snap.trajectory_variance,
+                    osc_amp,
+                ),
+                model_version=self.drift_ctrl._model_version,
+            )
+        except CoherenceViolation:
+            sci_violated = True
+            final_action_name = "BLOCKED"
+
+        # 11. Final action gating
+        final_allowed = governor_decision.allowed and J_raw > 0.0 and not sci_violated
+        final_action = final_action_name if final_allowed else "BLOCKED"
+
+        # 12. Coherence score
+        osc_detected = (governor_decision.oscillation_report.detected
+                        if governor_decision.oscillation_report else False)
+        eigenstate_id = (eigenstate_snap.current_eigenstate.id
+                         if eigenstate_snap.current_eigenstate else None)
+        eigenstate_type_val = (eigenstate_snap.current_eigenstate.type.value
+                               if eigenstate_snap.current_eigenstate else None)
 
         metrics = CoherenceMetrics(
-            coherence_score=coherence,
+            coherence_score=self._compute_coherence(
+                alignment.drift_score,
+                eigenstate_snap.trajectory_variance,
+                osc_amp,
+            ),
             model_version=self.aligner._model_version,
-            current_eigenstate_id=eigenstate_snap.current_eigenstate.id if eigenstate_snap.current_eigenstate else None,
-            eigenstate_type=eigenstate_snap.current_eigenstate.type.value if eigenstate_snap.current_eigenstate else None,
+            current_eigenstate_id=eigenstate_id,
+            eigenstate_type=eigenstate_type_val,
             J_raw=J_raw,
             J_governed=governor_decision.enforced_J,
             J_allowed=governor_decision.allowed,
-            oscillation_detected=governor_decision.oscillation_report.detected if governor_decision.oscillation_report else False,
+            oscillation_detected=osc_detected,
             compute_used_ms=self.compute.snapshot().spent_ms,
             drift_status=alignment.drift_status.value,
             eigenstate_transition_pending=eigenstate_snap.transition_pending is not None,
             total_coherence_loops=self._tick_count,
+            drift_score=drift_snap.drift_score,
+            lattice_oscillation_strength=smoother_snap.oscillation_strength,
+            trajectory_ok=stabilizer_snap.trajectory_ok,
+            sci_violated=sci_violated,
         )
 
         snap = MetaCoherenceSnapshot(
@@ -243,6 +311,9 @@ class MetaCoherenceController:
             compute=self.compute.snapshot(),
             raw_decision=raw_decision,
             final_action=final_action,
+            drift_snap=drift_snap,
+            smoother_snap=smoother_snap,
+            stabilizer_snap=stabilizer_snap,
         )
         self._last_snapshot = snap
         return snap
@@ -253,10 +324,10 @@ class MetaCoherenceController:
         trajectory_variance: float,
         oscillation_amplitude: float,
     ) -> float:
-        drift_component = 1.0 - min(drift_score / 0.4, 1.0)
-        variance_component = 1.0 - min(trajectory_variance / 0.5, 1.0)
-        oscillation_component = 1.0 - min(oscillation_amplitude / 0.3, 1.0)
-        return (drift_component * 0.4 + variance_component * 0.3 + oscillation_component * 0.3)
+        d = 1.0 - min(drift_score / 0.4, 1.0)
+        v = 1.0 - min(trajectory_variance / 0.5, 1.0)
+        o = 1.0 - min(oscillation_amplitude / 0.3, 1.0)
+        return d * 0.4 + v * 0.3 + o * 0.3
 
     def end_tick(self) -> BudgetDecision:
         return self.compute.snapshot()
@@ -264,8 +335,16 @@ class MetaCoherenceController:
     def force_model_rebuild(self, reason: str = "manual") -> AlignmentSnapshot:
         return self.aligner.force_correction(reason)
 
+    def force_drift_correction(self, reason: str = "manual"):
+        """Force a drift correction (v6.8)."""
+        return self.drift_ctrl.force_correction(reason)
+
     def set_governor_mode(self, mode: GovernorMode) -> None:
         self.governor.set_mode(mode)
+
+    def reset_sci_window(self) -> None:
+        """Start a new S-CI convergence window."""
+        self.sci.begin_window()
 
     def summary(self) -> dict:
         snap = self._last_snapshot
@@ -278,4 +357,8 @@ class MetaCoherenceController:
             "model_version": self.aligner._model_version,
             "eigenstate_count": self.eigenstate_detector.summary()["eigenstate_count"],
             "last_action": snap.final_action if snap else "none",
+            "sci_violated": snap.metrics.sci_violated if snap else False,
+            "drift_score": snap.metrics.drift_score if snap else None,
+            "trajectory_ok": snap.metrics.trajectory_ok if snap else None,
+            "lattice_oscillation": snap.metrics.lattice_oscillation_strength if snap else None,
         }
