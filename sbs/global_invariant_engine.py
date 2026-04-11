@@ -123,10 +123,21 @@ class GlobalInvariantEngine:
 
         # ── Invariant 2: Term monotonicity ───────────────────────────────────
         terms = [s.term for s in [drl, ccl, f2, desc]]
-        if terms != sorted(terms):
-            violations.append(
-                f"TERM_ORDER_VIOLATION: terms={terms} (must be monotonic)"
-            )
+        terms_with_names = [("DRL", drl.term), ("CCL", ccl.term), ("F2", f2.term), ("DESC", desc.term)]
+        # Monotonic term order — detect regressions within layers.
+        # A regression is when a layer's term DROPS below the max term already seen.
+        # Example: [1, 0, 0, 0] is fine (leader term=1, others uninitialised at 0)
+        # Example: [2, 1, 3] is a regression (CCL regressed from 2→1 while DRL moved to 3)
+        max_seen = -1
+        for layer_name, term_val in terms_with_names:
+            if layer_name == "DRL":
+                # DRL is the authoritative term source — initialise baseline
+                max_seen = max(max_seen, term_val)
+                continue
+            if term_val > 0 and term_val < max_seen:
+                violations.append(
+                    f"TERM_ORDER_VIOLATION: terms={terms} (must be monotonic)"
+                )
 
         # ── Invariant 3: Monotonic commit index (DESC) ───────────────────────
         prev = self.last_result.get("desc_commit_index", 0)

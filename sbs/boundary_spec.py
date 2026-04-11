@@ -81,7 +81,12 @@ class SystemBoundarySpec:
 
         # 1. Split-brain check
         if not self.allow_split_brain:
-            partition_count = system_state.get("partitions", 0)
+            # Read from nested layer state (drl / f2) where collect_state() puts them
+            partition_count = (
+                system_state.get("drl", {}).get("partitions", 0)
+                or system_state.get("f2", {}).get("partitions", 0)
+                or system_state.get("partitions", 0)
+            )
             if partition_count > self.max_partitions:
                 violations.append(
                     f"SPLIT_BRAIN: partitions={partition_count} "
@@ -89,7 +94,12 @@ class SystemBoundarySpec:
                 )
 
         # 2. Quorum safety
-        quorum_ratio = system_state.get("quorum_ratio", 0.0)
+        # Read from nested layer state where collect_state() places them
+        quorum_ratio = (
+            system_state.get("f2", {}).get("quorum_ratio", 0.0)
+            or system_state.get("drl", {}).get("quorum_ratio", 0.0)
+            or system_state.get("quorum_ratio", 0.0)
+        )
         if quorum_ratio < self.quorum_threshold:
             violations.append(
                 f"QUORUM_VIOLATION: ratio={quorum_ratio:.3f} "
