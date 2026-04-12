@@ -85,12 +85,12 @@ class ControlSurfaceModifier:
 
         # Detect oscillation from alternating direction signs
         if self._last_theta is not None and signal.signal_type != FeedbackSignalType.OSCILLATION:
-            delta_dir = signal.delta_norm_l2  # just magnitude for now
-            # Record sign direction heuristic: positive = increasing theta
             sign = 1 if signal.coherence_after >= signal.coherence_before else -1
             self._direction_history.append(sign)
             if len(self._direction_history) > 6:
                 self._direction_history.pop(0)
+        # Always update _last_theta for next signal's direction detection
+        self._last_theta = signal.delta_norm_l2  # store magnitude as proxy
 
     def get_exploration_bias(self, mutation_class) -> tuple[float, float]:
         """

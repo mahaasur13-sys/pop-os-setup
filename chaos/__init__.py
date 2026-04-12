@@ -28,6 +28,15 @@ from chaos.scenarios import (
 from chaos.harness import ChaosHarness, ChaosResult
 from chaos.validator import ChaosValidator, ValidationResult
 from chaos.partitioner import NetworkPartitioner, HostChaosAgent
+from chaos.stress_envelope import StabilityEnvelope, StabilityState
+from chaos.replay_validator import (
+    ReplayValidator,
+    ReplayVerdict,
+    TracePhase,
+    ChaosTrace,
+    ReplayResult,
+    DivergenceReport,
+)
 
 __all__ = [
     # Scenarios
@@ -50,4 +59,14 @@ __all__ = [
     # Partitioner
     "NetworkPartitioner",
     "HostChaosAgent",
+    # Stability envelope
+    "StabilityEnvelope",
+    "StabilityState",
+    # Replay validator
+    "ReplayValidator",
+    "ReplayVerdict",
+    "TracePhase",
+    "ChaosTrace",
+    "ReplayResult",
+    "DivergenceReport",
 ]

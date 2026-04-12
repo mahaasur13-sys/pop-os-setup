@@ -1,5 +1,4 @@
-"""
-test_observability.py — planning_observability layer tests
+"""test_observability.py — planning_observability layer tests.
 All 30 tests for trace logger, evaluation metrics, and drift profiler.
 """
 import pytest
@@ -89,18 +88,14 @@ class TestEvaluationMetricsCollector:
     """EvaluationMetricsCollector: metrics computation."""
 
     def test_plan_stability_index_stable(self):
-        # Nearly constant trajectory → stability formula: 1 - stddev/range
-        # [0.800, 0.801, 0.800, 0.799, 0.800] → stddev≈0.0006, range=0.002 → psi≈0.70
         scores = [0.800, 0.801, 0.800, 0.799, 0.800]
         psi = EvaluationMetricsCollector.plan_stability_index(scores)
-        assert 0.60 < psi < 1.0  # stable trajectory, algorithm gives ~0.70
+        assert 0.60 < psi < 1.0
 
     def test_plan_stability_index_chaotic(self):
-        # Highly variable → formula gives moderate-low values (not near 0)
-        # [0.10, 0.95, 0.10, 0.95, 0.10] → range=0.85, stddev≈0.40 → psi≈0.53
         scores = [0.10, 0.95, 0.10, 0.95, 0.10]
         psi = EvaluationMetricsCollector.plan_stability_index(scores)
-        assert 0.40 < psi < 0.70  # chaotic, formula gives ~0.51
+        assert 0.40 < psi < 0.70
 
     def test_plan_stability_index_single_point(self):
         psi = EvaluationMetricsCollector.plan_stability_index([0.80])
@@ -115,12 +110,12 @@ class TestEvaluationMetricsCollector:
         assert freq == 0.0
 
     def test_coherence_drop_rate(self):
-        traj = [0.80, 0.74, 0.68, 0.66, 0.60]  # clear drops > 0.05 threshold
+        traj = [0.80, 0.74, 0.68, 0.66, 0.60]
         rate = EvaluationMetricsCollector.coherence_drop_rate(traj, 0.05)
         assert rate > 0
 
     def test_coherence_recovery_rate(self):
-        traj = [0.60, 0.64, 0.68, 0.72, 0.76]  # clear recoveries > 0.03
+        traj = [0.60, 0.64, 0.68, 0.72, 0.76]
         rate = EvaluationMetricsCollector.coherence_recovery_rate(traj, 0.03)
         assert rate > 0
 
@@ -151,7 +146,7 @@ class TestEvaluationMetricsCollector:
         )
         health = EvaluationMetricsCollector.planning_health_score(metrics)
         assert 0.0 <= health <= 1.0
-        assert health > 0.8  # good health
+        assert health > 0.8
 
 
 class TestDriftProfiler:
@@ -160,14 +155,13 @@ class TestDriftProfiler:
     def test_oscillation_detected_oscillating(self):
         profiler = DriftProfiler(
             oscillation_window=10,
-            coherence_drop_threshold=0.105,  # oscillation: var=0.134>0.105, delta=0.04<0.105 ✓; unstable_goal: vel=0.10>0.105 ✓
+            coherence_drop_threshold=0.105,
         )
-        # Symmetric oscillation: first==last → sum of deltas = 0 exactly
         coherence = [0.75, 0.90, 0.75, 0.90, 0.75, 0.75]
         profile = profiler.detect_oscillation(coherence, 5, 10, "p1")
         assert profile.is_oscillating
         assert profile.oscillation_frequency == 1.0
-        assert abs(profile.avg_coherence_delta) == 0.0  # exact zero from symmetry
+        assert abs(profile.avg_coherence_delta) == 0.0
 
     def test_oscillation_not_detected_stable(self):
         profiler = DriftProfiler()
@@ -182,7 +176,6 @@ class TestDriftProfiler:
 
     def test_goal_drift_detected(self):
         profiler = DriftProfiler(coherence_drop_threshold=0.03)
-        # Clear downward drift: 0.90 → 0.50 over 5 ticks
         coherence_at_replans = [0.90, 0.80, 0.70, 0.60, 0.50]
         profile = profiler.detect_goal_drift(coherence_at_replans, 20, "p1", goal_drift_threshold=0.03)
         assert profile.is_drift_detected
@@ -196,7 +189,6 @@ class TestDriftProfiler:
 
     def test_weight_instability_detected(self):
         profiler = DriftProfiler()
-        # Growing variance: small → large adjustments
         adjustments = [0.01, 0.02, 0.05, 0.10, 0.20, 0.35]
         profile = profiler.detect_weight_instability(adjustments)
         assert profile.is_weight_instability_detected
@@ -210,14 +202,12 @@ class TestDriftProfiler:
 
     def test_dag_drift_detected_on_node_change(self):
         profiler = DriftProfiler(dag_snapshot_interval=1)
-        # Record two snapshots
-        profiler.record_dag_snapshot([
-            {"node_id": "n1"}, {"node_id": "n2"}
-        ], 5)
-        profiler.record_dag_snapshot([
-            {"node_id": "n1"}, {"node_id": "n2"}
-        ], 10)
-        # Very different node set
+        profiler.record_dag_snapshot(
+            [{"node_id": "n1"}, {"node_id": "n2"}], 5
+        )
+        profiler.record_dag_snapshot(
+            [{"node_id": "n1"}, {"node_id": "n2"}], 10
+        )
         current = [
             {"node_id": "n1"}, {"node_id": "n3"}, {"node_id": "n4"},
             {"node_id": "n5"}, {"node_id": "n6"}, {"node_id": "n7"},
@@ -229,17 +219,16 @@ class TestDriftProfiler:
     def test_dag_drift_not_detected_similar(self):
         profiler = DriftProfiler(
             dag_snapshot_interval=1,
-            structural_similarity_threshold=0.50,  # lower threshold for test
+            structural_similarity_threshold=0.50,
         )
-        profiler.record_dag_snapshot([
-            {"node_id": "n1"}, {"node_id": "n2"}
-        ], 5)
-        profiler.record_dag_snapshot([
-            {"node_id": "n1"}, {"node_id": "n2"}
-        ], 10)
+        profiler.record_dag_snapshot(
+            [{"node_id": "n1"}, {"node_id": "n2"}], 5
+        )
+        profiler.record_dag_snapshot(
+            [{"node_id": "n1"}, {"node_id": "n2"}], 10
+        )
         current = [{"node_id": "n1"}, {"node_id": "n2"}, {"node_id": "n3"}]
         profile = profiler.detect_dag_drift(current)
-        # With threshold=0.50 and similarity≈0.67 → not detected
         assert not profile.is_drift_detected
 
     def test_full_scan_returns_episodes(self):
@@ -250,21 +239,18 @@ class TestDriftProfiler:
             dag_snapshot_interval=1,
             coherence_drop_threshold=0.12,
         )
-        profiler.goal_drift_threshold = 0.095  # vel=0.10 > 0.095; oscillation: var=0.134>0.12, avg_delta=0.04<0.12
-        # Oscillation pattern: avg_delta = 0.05 < 0.06 threshold (strict < required)
+        profiler.goal_drift_threshold = 0.095
         coherence = [0.70, 0.90, 0.70, 0.90, 0.70, 0.90]
-        # Goal drift (clear downward)
         coherence_at_replans = [0.90, 0.80, 0.70, 0.60, 0.50, 0.40]
-        # Weight instability
         weight_adjustments = [0.01, 0.02, 0.05, 0.10, 0.20, 0.35]
         current_nodes = [{"node_id": f"n{i}"} for i in range(1, 8)]
 
-        profiler.record_dag_snapshot([
-            {"node_id": "n1"}, {"node_id": "n3"}
-        ], 5)
-        profiler.record_dag_snapshot([
-            {"node_id": "n1"}, {"node_id": "n3"}
-        ], 10)
+        profiler.record_dag_snapshot(
+            [{"node_id": "n1"}, {"node_id": "n3"}], 5
+        )
+        profiler.record_dag_snapshot(
+            [{"node_id": "n1"}, {"node_id": "n3"}], 10
+        )
 
         episodes = profiler.scan(
             tick=20,

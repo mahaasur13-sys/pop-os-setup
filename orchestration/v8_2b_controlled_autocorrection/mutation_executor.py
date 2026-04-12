@@ -56,8 +56,9 @@ class ExecutorConfig:
     """Runtime configuration for MutationExecutor."""
 
     # v8.2a integration
-    use_safety_gate: bool = True  # run StabilityGovernor check before mutation
-    use_invariants: bool = True   # run InvariantChecker after delta, before commit
+    use_safety_gate: bool = True
+    use_invariants: bool = True
+    allow_degradation: bool = False
 
     # Override policy constraints (None = use policy defaults)
     override_retune_epsilon: Optional[float] = None
