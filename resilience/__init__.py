@@ -1,5 +1,5 @@
 """
-ATOMFederationOS Resilience Layer — v6.5
+ATOMFederationOS Resilience Layer — v6.7
 
 Modules:
   v6.4 (base closed-loop):
@@ -12,9 +12,22 @@ Modules:
 
   v6.5 (global control layer):
     - GlobalControlArbiter   — conflict resolution across subsystems
-    - SystemOptimizer        — J() global objective + gradient descent
+    - SystemOptimizer       — J() global objective + gradient descent
     - ContinuousStabilityEngine — 1Hz proactive tick loop
-    - InvariantsEngine       — formal stability invariant verification
+    - InvariantsEngine      — formal stability invariant verification
+
+  v6.6 (self-modeling + predictive + goal-directed):
+    - SelfModel             — internal causal graph + what-if simulation
+    - PredictiveController  — forecast-based pre-emptive healing
+    - DecisionLattice       — formal deterministic decision algebra
+    - AdaptiveObjectiveController — J-gated autonomous control
+
+  v6.7 (meta-coherence layer — model ↔ reality ↔ objective closure):
+    - ModelRealityAligner          — self_model vs real cluster drift detection
+    - EigenstateDetector           — stable attractor detection + transition prediction
+    - ObjectiveStabilityGovernor   — J-gate oscillation prevention
+    - ComputeBudgetController      — compute overhead bounding per tick
+    - MetaCoherenceController      — master controller wiring all v6.7 subsystems
 """
 
 from resilience.policy_engine import (
@@ -78,6 +91,66 @@ from resilience.invariants import (
     StabilitySnapshot as InvariantSnapshot,
 )
 
+# v6.6
+from resilience.self_model import (
+    SystemState,
+    NodeRole,
+)
+
+from resilience.predictive_controller import (
+    PredictiveController,
+    PredictiveTickResult,
+)
+
+from resilience.decision_lattice import (
+    DecisionLattice,
+    LatticeDecision,
+)
+
+from resilience.adaptive_objective import (
+    AdaptiveObjectiveController,
+    AdaptiveTickResult,
+)
+
+# v6.7
+from resilience.model_reality_aligner import (
+    ModelRealityAligner,
+    AlignmentSnapshot,
+    DriftStatus,
+    DriftEvent,
+)
+
+from resilience.eigenstate_detector import (
+    EigenstateDetector,
+    EigenstateSnapshot,
+    Eigenstate,
+    EigenstateType,
+    TransitionEvent,
+)
+
+from resilience.objective_stability_governor import (
+    ObjectiveStabilityGovernor,
+    GovernorMode,
+    JWindow,
+    OscillationReport,
+    GovernorDecision,
+)
+
+from resilience.compute_budget_controller import (
+    ComputeBudgetController,
+    Subsystem,
+    BudgetAllocation,
+    CostEntry,
+    BudgetDecision,
+    ComputeBudgetSnapshot,
+)
+
+from resilience.meta_coherence_controller import (
+    MetaCoherenceController,
+    CoherenceMetrics,
+    MetaCoherenceSnapshot,
+)
+
 __all__ = [
     # v6.4 core
     "PolicyEngine",
@@ -111,4 +184,37 @@ __all__ = [
     "InvariantSet",
     "InvariantSeverity",
     "InvariantSnapshot",
+    # v6.6
+    "SystemState",
+    "NodeRole",
+    "PredictiveController",
+    "PredictiveTickResult",
+    "DecisionLattice",
+    "LatticeDecision",
+    "AdaptiveObjectiveController",
+    "AdaptiveTickResult",
+    # v6.7
+    "ModelRealityAligner",
+    "AlignmentSnapshot",
+    "DriftStatus",
+    "DriftEvent",
+    "EigenstateDetector",
+    "EigenstateSnapshot",
+    "Eigenstate",
+    "EigenstateType",
+    "TransitionEvent",
+    "ObjectiveStabilityGovernor",
+    "GovernorMode",
+    "JWindow",
+    "OscillationReport",
+    "GovernorDecision",
+    "ComputeBudgetController",
+    "Subsystem",
+    "BudgetAllocation",
+    "CostEntry",
+    "BudgetDecision",
+    "ComputeBudgetSnapshot",
+    "MetaCoherenceController",
+    "CoherenceMetrics",
+    "MetaCoherenceSnapshot",
 ]
