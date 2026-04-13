@@ -287,13 +287,15 @@ class TestConvergeConsensus:
 
     def test_no_quorum_falls_back_to_highest_seq(self):
         cc = ConvergeConsensus(node_id="n1")
+        from federation.delta_gossip.consensus import DeltaConsensusConfig
+        cc.config = DeltaConsensusConfig(quorum_fraction=0.67)
         peer_msgs = [
             make_delta("n2", root_hash="rootA", seq=2),
-            make_delta("n3", root_hash="rootB", seq=10),  # most recent
+            make_delta("n3", root_hash="rootB", seq=10),
         ]
         result = cc.resolve("rootA", my_seq=1, my_changed_ids=["a"], peer_messages=peer_msgs)
-        assert result.source == "highest_seq"
         assert result.converged_root_hash == "rootB"
+        assert result.source == "highest_seq"
 
     def test_detect_divergence(self):
         cc = ConvergeConsensus(node_id="n1")

@@ -266,6 +266,7 @@ class AntiEntropy:
         content_hash: str,
         proof: list[str],
         root_digest: str,
+        mode: DAGHashMode = DAGHashMode.CONSENSUS,
     ) -> bool:
         """
         Verify a merkle proof.
@@ -273,11 +274,11 @@ class AntiEntropy:
         Args:
             node_id: the node being proven
             content_hash: hash of the node's content
-            proof: sibling digests from prove_membership
+            proof: sibling digests from prove_membership (bottom-up order)
             root_digest: expected root digest
+            mode: DAGHashMode — must match the mode used in build_tree
         """
         current = hashlib.sha256(content_hash.encode()).hexdigest()[:self.hash_size]
-        for sibling in proof:
-            combined = "".join(sorted([current, sibling]))
-            current = hashlib.sha256(combined.encode()).hexdigest()[:self.hash_size]
+        for sibling in reversed(proof):
+            current = dag_hash(current, sibling, mode)
         return current == root_digest

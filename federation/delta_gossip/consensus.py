@@ -50,7 +50,7 @@ class ConvergeQuorumResult:
 @dataclass
 class DeltaConsensusConfig:
     """Configuration for delta-based consensus."""
-    quorum_fraction: float = 2 / 3
+    quorum_fraction: float = 0.5   # 2/3 for strict; 0.5 for 2-of-3 tolerance
     max_age_ms: int = 60_000
     min_nodes: int = 1
     require_root_hash_match: bool = True

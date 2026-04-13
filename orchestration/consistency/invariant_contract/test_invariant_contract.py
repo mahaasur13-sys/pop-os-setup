@@ -466,10 +466,11 @@ class TestSystemInvariants:
         result = self._make_evaluator(HASH_MODE_CONSISTENCY).evaluate(state)[0]
         assert result.satisfied
 
-    def test_get_all_system_invariants_returns_11(self):
+    def test_get_all_system_invariants_returns_18(self):
         invs = get_all_system_invariants()
-        assert len(invs) == 11  # v9.0: added HASH_MODE_CONSISTENCY
+        assert len(invs) == 18  # v9.0: 11, v9.4: +2, v9.5: +2, v9.6: +2, v9.9: +1
         names = {inv.name for inv in invs}
         assert "NO_OSCILLATION_OVER_THRESHOLD" in names
         assert "DAG_CYCLE_FREEDOM" in names
         assert "HASH_MODE_CONSISTENCY" in names  # v9.0
+        assert "INBOUND_MESSAGE_AUTHENTICITY" in names  # v9.9

@@ -138,6 +138,55 @@ def _check_trust_vector_consistency(state: dict) -> bool:
             return False
     return True
 
+def _check_trust_weighted_stability(state: dict) -> bool:
+    """
+    TRUST_WEIGHTED_CONSENSUS_STABILITY: consensus must be stable under bounded
+    trust perturbation. No CRITICAL shift types and no trust collapse.
+    """
+    CRITICAL_SHIFTS = {"OUTCOME_FLIP", "TRUST_COLLAPSE", "DOMINATION_SHIFT"}
+    shift_history = state.get("consensus_shift_history", [])
+    if not shift_history:
+        return True
+    for event in shift_history:
+        shift_type = event.get("shift_type", "") if isinstance(event, dict) else getattr(event, "shift_type", None)
+        if isinstance(shift_type, str) and shift_type in CRITICAL_SHIFTS:
+            return False
+    if state.get("trust_collapse_detected", False):
+        return False
+    return True
+
+def _check_weight_domination(state: dict, threshold: float = 0.5) -> bool:
+    """
+    NODE_WEIGHT_DOMINATION_BOUNDED: no single node controls ≥ threshold fraction
+    of total weight. prot
+    """
+    snapshot = state.get("node_weights_snapshot", {})
+    dom_fraction = snapshot.get("dom_weight_fraction", 0.0) if isinstance(snapshot, dict) else 0.0
+    return dom_fraction < threshold
+
+def _check_inbound_message_authenticity(state: dict) -> bool:
+    """
+    INBOUND_MESSAGE_AUTHENTICITY_INVARIANT: v9.9
+    All inbound federation messages must pass FederationInboundSecurityGate:
+      - signature_valid == True
+      - replay_valid == True
+      - origin_policy_allowed == True
+
+    State fields:
+      - inbound_messages_checked: total messages verified
+      - inbound_messages_rejected: messages rejected by gate
+      - last_rejection_reason: str description of last rejection
+    """
+    checked = state.get("inbound_messages_checked", 0)
+    rejected = state.get("inbound_messages_rejected", 0)
+    if checked == 0:
+        return True  # no messages yet — can't evaluate
+
+    # Rejection rate must be 0 for messages that reached the gate
+    # (gating is binary: all-or-nothing at the gate level)
+    return rejected == 0
+
+
 NO_OSCILLATION_OVER_THRESHOLD = InvariantDefinition(
     name="NO_OSCILLATION_OVER_THRESHOLD",
     description="System must not be in a high-frequency oscillation state.",
@@ -276,6 +325,47 @@ TRUST_VECTOR_CONSISTENCY = InvariantDefinition(
     violation_cost=0.9,
     tags=["proof_ledger", "trust", "consistency", "v9.5"])
 
+TRUST_WEIGHTED_CONSENSUS_STABILITY = InvariantDefinition(
+    name="TRUST_WEIGHTED_CONSENSUS_STABILITY",
+    description=(
+        "Consensus result must be stable under bounded trust perturbation. "
+        "No CRITICAL shift types (OUTCOME_FLIP, TRUST_COLLAPSE, DOMINATION_SHIFT) "
+        "may appear in shift history, and no trust collapse may be detected."
+    ),
+    severity=InvariantSeverity.CRITICAL,
+    enforcement_action=EnforcementAction.BLOCK_MUTATION,
+    check_fn=_check_trust_weighted_stability,
+    violation_cost=1.0,
+    tags=["trust_weighted", "consensus", "stability", "v9.6"],
+)
+
+NODE_WEIGHT_DOMINATION_BOUNDED = InvariantDefinition(
+    name="NODE_WEIGHT_DOMINATION_BOUNDED",
+    description=(
+        "No single node may control ≥ 50% of total federation weight. "
+        "A dominating node creates a single-point-of-control risk."
+    ),
+    severity=InvariantSeverity.HIGH,
+    enforcement_action=EnforcementAction.ESCALATE,
+    check_fn=lambda s: _check_weight_domination(s, threshold=0.5),
+    violation_cost=0.8,
+    tags=["trust_weighted", "consensus", "domination", "v9.6"],
+)
+
+INBOUND_MESSAGE_AUTHENTICITY_INVARIANT = InvariantDefinition(
+    name="INBOUND_MESSAGE_AUTHENTICITY",
+    description=(
+        "CRITICAL (v9.9): All inbound federation messages must pass "
+        "FederationInboundSecurityGate checks: signature_valid AND replay_valid AND origin_allowed. "
+        "No inbound message may reach trust/gossip/consensus layer without passing the gate."
+    ),
+    severity=InvariantSeverity.CRITICAL,
+    enforcement_action=EnforcementAction.BLOCK_MUTATION,
+    check_fn=_check_inbound_message_authenticity,
+    violation_cost=1.0,
+    tags=["security", "inbound", "signature", "replay", "origin", "v9.9"],
+)
+
 def get_all_system_invariants() -> list[InvariantDefinition]:
     return [
         NO_OSCILLATION_OVER_THRESHOLD,
@@ -293,4 +383,7 @@ def get_all_system_invariants() -> list[InvariantDefinition]:
         STALE_PROOF_NOT_TRUSTED,  # v9.4
         TRUST_CONVERGENCE_INVARIANT,  # v9.5
         TRUST_VECTOR_CONSISTENCY,  # v9.5
+        TRUST_WEIGHTED_CONSENSUS_STABILITY,
+        NODE_WEIGHT_DOMINATION_BOUNDED,
+        INBOUND_MESSAGE_AUTHENTICITY_INVARIANT,  # v9.9
     ]
