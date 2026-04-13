@@ -30,6 +30,7 @@ from orchestration.consistency.invariant_contract import (
     DAG_CYCLE_FREEDOM,
     EVALUATION_SCORE_BOUNDS,
     REPLAN_COUNT_BOUNDED,
+    HASH_MODE_CONSISTENCY,  # v9.0
     get_all_system_invariants,
 )
 
@@ -434,9 +435,41 @@ class TestSystemInvariants:
         result = self._make_evaluator(REPLAN_COUNT_BOUNDED).evaluate(state)[0]
         assert not result.satisfied
 
-    def test_get_all_system_invariants_returns_10(self):
+    # v9.0: HASH_MODE_CONSISTENCY tests
+    def test_hash_mode_consistency_satisfied_same_mode(self):
+        state = {
+            "peer_states": {
+                "peer1": {"last_root_hash": "abc", "hash_mode": "CONSENSUS"},
+                "peer2": {"last_root_hash": "abc", "hash_mode": "CONSENSUS"},
+            }
+        }
+        result = self._make_evaluator(HASH_MODE_CONSISTENCY).evaluate(state)[0]
+        assert result.satisfied
+
+    def test_hash_mode_consistency_violated_mixed_mode(self):
+        state = {
+            "peer_states": {
+                "peer1": {"last_root_hash": "abc", "hash_mode": "CONSENSUS"},
+                "peer2": {"last_root_hash": "abc", "hash_mode": "CAUSAL"},
+            }
+        }
+        result = self._make_evaluator(HASH_MODE_CONSISTENCY).evaluate(state)[0]
+        assert not result.satisfied
+
+    def test_hash_mode_consistency_satisfied_different_roots(self):
+        state = {
+            "peer_states": {
+                "peer1": {"last_root_hash": "abc", "hash_mode": "CONSENSUS"},
+                "peer2": {"last_root_hash": "xyz", "hash_mode": "CAUSAL"},
+            }
+        }
+        result = self._make_evaluator(HASH_MODE_CONSISTENCY).evaluate(state)[0]
+        assert result.satisfied
+
+    def test_get_all_system_invariants_returns_11(self):
         invs = get_all_system_invariants()
-        assert len(invs) == 10
+        assert len(invs) == 11  # v9.0: added HASH_MODE_CONSISTENCY
         names = {inv.name for inv in invs}
         assert "NO_OSCILLATION_OVER_THRESHOLD" in names
         assert "DAG_CYCLE_FREEDOM" in names
+        assert "HASH_MODE_CONSISTENCY" in names  # v9.0

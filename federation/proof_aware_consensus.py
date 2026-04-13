@@ -81,15 +81,34 @@ class ProofAwareConsensusCandidate:
     changed_node_ids: list[str] = field(default_factory=list)
     raw_score: float = 0.0
 
-    def compute_score(self) -> float:
+    def compute_score(
+        self,
+        proof_ledger: "ProofLedger | None" = None,
+        now: float | None = None,
+    ) -> float:
         """
         Compute composite ranking score.
 
-        Higher = better candidate.
-        proof_valid is the primary signal: valid proof = +10, invalid = -10.
+        Higher is better.
+        When proof_ledger + now are provided: uses continuous trust_score ∈ [0, 1]
+          score = 10.0 * trust_score
+        Otherwise: falls back to legacy boolean proof_valid signal
+          score = (10.0 if proof_valid else -10.0) + stability_score - drift_score + origin_bonus
         """
-        base = 10.0 if self.proof_valid is True else (-10.0 if self.proof_valid is False else 0.0)
+        if proof_ledger is not None and self.proof_hash and now is not None:
+            trust = proof_ledger.trust_score(self.proof_hash, now)
+            # Apply origin_bonus on top of trust signal
+            origin_bonus = {
+                ProofOrigin.REMOTE:    0.5,
+                ProofOrigin.SNAPSHOT: 0.3,
+                ProofOrigin.REPLAY:   0.1,
+                ProofOrigin.SYNTHETIC: 0.0,
+                None: 0.0,
+            }.get(self.proof_origin, 0.0)
+            self.raw_score = 10.0 * trust + self.stability_score - self.drift_score + origin_bonus
+            return self.raw_score
 
+        base = 10.0 if self.proof_valid is True else (-10.0 if self.proof_valid is False else 0.0)
         origin_bonus = {
             ProofOrigin.REMOTE:    0.5,
             ProofOrigin.SNAPSHOT: 0.3,
@@ -97,7 +116,6 @@ class ProofAwareConsensusCandidate:
             ProofOrigin.SYNTHETIC: 0.0,
             None: 0.0,
         }.get(self.proof_origin, 0.0)
-
         self.raw_score = base + self.stability_score - self.drift_score + origin_bonus
         return self.raw_score
 
