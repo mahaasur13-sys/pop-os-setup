@@ -31,6 +31,8 @@ from .resilience import (
     FailureKind,
 )
 from .task_store import TaskStore, TaskState
+from .event_sourcing import EventType, TaskEvent
+from .event_store import EventStore
 
 
 # ── state: TaskStore (единый source of truth) ────────────────────────────────
@@ -332,6 +334,7 @@ async def worker_loop():
 
                 store = await get_task_store()
                 retry_engine = await get_retry_engine()
+                event_store = EventStore(REDIS_URL)
 
                 budget = RetryBudget(task_id=task_id, max_attempts=max_retries)
                 await retry_engine.init_budget(task_id, budget)
@@ -344,6 +347,18 @@ async def worker_loop():
 
                 await store.record_metric(task_id, "claims")
                 claimed_epoch = record.epoch
+
+                # EventStore: TASK_CLAIMED
+                await event_store.append(
+                    task_id,
+                    TaskEvent.make(
+                        task_id=task_id,
+                        event_type=EventType.TASK_CLAIMED,
+                        worker_id=worker_id,
+                        epoch=claimed_epoch,
+                        lamport_ts=0,
+                    ),
+                )
 
                 dag_id = await (await get_dag_recorder()).create(task_id, epoch=claimed_epoch)
 
@@ -370,19 +385,28 @@ async def worker_loop():
                                 await retry_engine.init_budget(task_id, budget)
                                 await asyncio.sleep(delay)
                                 await store.record_metric(task_id, "retries")
+                                # EventStore: TASK_RETRIED
+                                rec = await store.get_task(task_id)
+                                new_epoch = rec.epoch if rec else claimed_epoch
+                                await event_store.append_task_retried(task_id, claimed_epoch, worker_id, new_epoch)
                                 continue
                             await store.complete_task(task_id, worker_id, result)
                             await store.fail_task(task_id, worker_id, error_str)
                             await store.record_metric(task_id, "failures")
+                            # EventStore: TASK_FAILED
+                            await event_store.append_task_failed(task_id, claimed_epoch, worker_id, error_str)
                         else:
                             await store.complete_task(task_id, worker_id, result)
                             await store.record_metric(task_id, "completions")
+                            # EventStore: TASK_COMPLETED
+                            await event_store.append_task_completed(task_id, claimed_epoch, worker_id, result)
                         break
 
                     except CircuitOpenError as e:
                         await store.complete_task(task_id, worker_id, {"error": str(e)})
                         await store.fail_task(task_id, worker_id, str(e))
                         await store.record_metric(task_id, "failures")
+                        await event_store.append_task_failed(task_id, claimed_epoch, worker_id, str(e))
                         break
                     except asyncio.CancelledError:
                         await store.cancel_task(task_id, worker_id)
@@ -398,6 +422,7 @@ async def worker_loop():
                             continue
                         await store.complete_task(task_id, worker_id, {"error": error_msg})
                         await store.fail_task(task_id, worker_id, error_msg)
+                        await event_store.append_task_failed(task_id, claimed_epoch, worker_id, error_msg)
                         break
 
             # fire tasks bounded by semaphore

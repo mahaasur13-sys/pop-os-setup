@@ -141,8 +141,20 @@ async def process_message(message_id: str, data: dict) -> None:
     await store.record_metric(task_id, "claims")
     claimed_epoch = record.epoch
 
-    from .engine import run as engine_run
+    # EventStore: emit TASK_CLAIMED
+    event_store = await _get_event_store()
+    await event_store.append(
+        task_id,
+        TaskEvent.make(
+            task_id=task_id,
+            event_type=EventType.TASK_CLAIMED,
+            worker_id=worker_id,
+            epoch=claimed_epoch,
+            lamport_ts=0,
+        ),
+    )
 
+    from .engine import run as engine_run
     try:
         result = await engine_run(
             task=payload.get("task", ""),
@@ -157,6 +169,9 @@ async def process_message(message_id: str, data: dict) -> None:
         await store.complete_task(task_id, worker_id, result)
         await store.record_metric(task_id, "completions")
 
+        # EventStore: emit TASK_COMPLETED
+        await event_store.append_task_completed(task_id, claimed_epoch, worker_id, result)
+
     except Exception as exc:
         tb = traceback.format_exc()
         error_msg = f"{type(exc).__name__}: {exc}\n{tb}"
@@ -166,8 +181,14 @@ async def process_message(message_id: str, data: dict) -> None:
             rec = await store.get_task(task_id)
             if rec and rec.state == TaskState.PENDING:
                 await store.record_metric(task_id, "retries")
+                # EventStore: emit TASK_RETRIED
+                await event_store.append_task_retried(
+                    task_id, claimed_epoch, worker_id, rec.epoch,
+                )
             else:
                 await store.record_metric(task_id, "failures")
+                # EventStore: emit TASK_FAILED
+                await event_store.append_task_failed(task_id, claimed_epoch, worker_id, error_msg)
 
 
 # ── concurrent worker loop (semaphore-bounded) ───────────────────────────────
@@ -224,3 +245,14 @@ async def _get_task_store() -> "TaskStore":
         from .task_store import TaskStore, TaskState
         _task_store = TaskStore(REDIS_URL)
     return _task_store
+
+
+_event_store: Optional["EventStore"] = None
+
+
+async def _get_event_store() -> "EventStore":
+    global _event_store
+    if _event_store is None:
+        from .event_store import EventStore
+        _event_store = EventStore(REDIS_URL)
+    return _event_store
