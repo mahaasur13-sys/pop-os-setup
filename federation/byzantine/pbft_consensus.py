@@ -176,8 +176,9 @@ class PBFTLiteConsensusEngine:
 
     def on_prepare(self, msg: PBFTMessage) -> tuple[bool, Optional[PBFTMessage]]:
         """
-        Accumulate PREPARE. If 2f+1 for same digest → transition to COMMIT.
-        Returns (accepted, own COMMIT message to broadcast or None).
+        Accumulate PREPARE. If 2f+1 for same digest (including self) → transition to COMMIT.
+        Self-vote is always implicitly counted: the node that sent PRE_PREPARE is
+        guaranteed to have voted PREPARE for its own value.
         """
         if self._phase != PBFTPhase.PREPARE:
             return False, None
@@ -190,7 +191,9 @@ class PBFTLiteConsensusEngine:
         f = QuorumCalculator.compute_f(self.n_nodes)
         threshold = 2 * f + 1
 
-        if len(self._prepare_queue) >= threshold:
+        # Quorum includes self. Self's own PREPARE is implicit (leader sent PRE_PREPARE
+        # to itself and entered PREPARE state). Count: external PREPARE messages + 1 self.
+        if len(self._prepare_queue) + 1 >= threshold:
             self._phase = PBFTPhase.COMMIT
             self._commit_queue.clear()
             return True, self._make_msg(PBFTPhase.COMMIT, self._view, msg.digest, msg.round_num)

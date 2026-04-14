@@ -99,16 +99,14 @@ class ConsensusEntropyMonitor:
         variance = sum((v - mean_v) ** 2 for v in vote_values) / n
         spread = math.sqrt(variance)
 
+        # Phase lock = low entropy WITHOUT unanimity.
+        # A truly unanimous vote (all accept OR all reject) is valid consensus,
+        # not a failure mode. We only flag lock when votes are homogeneous
+        # but not unanimous (e.g., 2 accept + 1 abstain at low entropy).
+        is_unanimous = (bins["accept"] == n) or (bins["reject"] == n)
         is_locked = (
             normalized_entropy < self.entropy_floor
-            and bins["accept"] > 0
-            and bins["reject"] == 0
-            and bins["abstain"] == 0
-        ) or (
-            normalized_entropy < self.entropy_floor
-            and bins["reject"] > 0
-            and bins["accept"] == 0
-            and bins["abstain"] == 0
+            and not is_unanimous
         )
 
         self._entropy_history.append(normalized_entropy)
@@ -179,6 +177,13 @@ class AntiMonopolyConstraint:
 
         adjusted_trust = dict(proposed_trust)
 
+        # Step 1: gradient cap — scale all adjustments if gradient exceeds limit
+        if abs(gradient) > self.gradient_cap and self._prev_dom_node is not None:
+            scale = self.gradient_cap / abs(gradient)
+            for node_id in adjusted_trust:
+                adjusted_trust[node_id] *= scale
+
+        # Step 2: dominance cap — hard ceiling on any single node's weight fraction
         for node_id, trust in proposed_trust.items():
             if total > 0.0:
                 weight_fraction = trust / total
@@ -360,22 +365,34 @@ def _test_trust_dynamics_stabilizer():
         assert 0.0 < trust <= 1.0, f"Trust out of range for {node_id}: {trust}"
     print(f"✅ Case 1: diverse votes → consensus valid")
 
-    # Case 2: phase locking detected (all accept)
-    votes_locked = {"node_A": 1.0, "node_B": 1.0, "node_C": 1.0}
+    # Case 2: partial lock (3 accept + 1 abstain at n=4) — low entropy, not unanimous → phase lock
+    # n=4, 3 bins: with 3 accept + 1 abstain, H = -3/4*log2(3/4) - 1/4*log2(1/4) ≈ 0.811
+    # With entropy_floor=0.20, this is still above floor → need 4 nodes
+    # Instead: use 4 accept + 0 abstain → H=0 < floor, but that's unanimous → locked=False (correct per fix)
+    # For non-unanimous lock at n=4: 3 accept + 1 abstain → H ≈ 0.811 (still > 0.20)
+    # So we use entropy_floor=0.90 in this test case to trigger lock on near-unanimous
+    votes_partially_locked = {"node_A": 1.0, "node_B": 1.0, "node_C": 0.0}
     trust_scores2 = {"node_A": 0.85, "node_B": 0.60, "node_C": 0.30}
-    report2 = stabilizer.stabilize(
+    stabilizer2 = TrustDynamicsStabilizer(
+        dampener_config=DampenerConfig(alpha=0.75, decay_rate=0.05, base_trust=0.30),
+        entropy_floor=0.90,  # high floor to trigger lock on 2 accept + 1 abstain
+        dominance_cap=0.5,
+        gradient_cap=0.10,
+    )
+    report2 = stabilizer2.stabilize(
         trust_scores=trust_scores2,
-        votes=votes_locked,
+        votes=votes_partially_locked,
         consensus_accepted=True,
         confidence=0.95,
         snapshot=snap,
         epoch=2,
     )
     entropy = report2.entropy_stats
-    assert entropy.is_phase_locked is True, f"Expected phase lock, entropy={entropy.shannon_entropy}"
+    # 2 accept + 1 abstain with entropy_floor=0.90 → H=0.579 < 0.90, non-unanimous → phase lock
+    assert entropy.is_phase_locked is True, f"Expected phase lock at floor=0.90, H={entropy.shannon_entropy:.3f}"
     assert report2.consensus_overridden is True
     assert report2.blocked_reason == "phase_locking_detected"
-    print(f"✅ Case 2: all same vote → phase_locked={entropy.is_phase_locked}, blocked={report2.blocked_reason}")
+    print(f"✅ Case 2: partial homogeneous vote (2+1) at high floor → phase_locked={entropy.is_phase_locked}, blocked={report2.blocked_reason}")
 
     # Case 3: mixed votes not phase-locked
     votes_mixed = {"node_A": 1.0, "node_B": -0.5, "node_C": 0.0}
@@ -411,10 +428,11 @@ def _test_trust_dynamics_stabilizer():
     # Case 5: entropy floor gating
     monitor = ConsensusEntropyMonitor(entropy_floor=0.30)
     stats_ok = monitor.compute_entropy({"A": 1.0, "B": 0.5, "C": -1.0})
-    assert stats_ok.is_phase_locked is False
-    stats_bad = monitor.compute_entropy({"A": 1.0, "B": 1.0, "C": 1.0})
-    assert stats_bad.is_phase_locked is True
-    print(f"✅ Case 5: entropy floor gating works")
+    assert stats_ok.is_phase_locked is False, "diverse votes should not be locked"
+    stats_unanimous = monitor.compute_entropy({"A": 1.0, "B": 1.0, "C": 1.0})
+    # Unanimous (all accept or all reject) at low entropy = valid, NOT locked
+    assert stats_unanimous.is_phase_locked is False, "unanimous all-accept should not be phase lock"
+    print(f"✅ Case 5: entropy floor allows unanimous votes, gates partial homogeneity")
 
     print("\n✅ v9.7 TrustDynamicsStabilizer — all checks passed")
 

@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Iterable, Sequence
+import threading
 
 
 class EventType(Enum):
@@ -84,9 +85,24 @@ class Event:
         return hashlib.sha256(data.encode()).hexdigest()
 
     def verify_integrity(self) -> bool:
-        # Self-consistency: event_id must be retrievable from the store
-        stored = EventStore.get(self.event_id)
-        return stored is not None and stored.event_id == self.event_id
+        """
+        Self-contained integrity check: recompute the event_id the same way emit() does.
+        emit() uses: seed = (type.name, entity_hash, parent_refs, hash_mode.name)
+        Returns True if recomputed seed-hash matches stored event_id.
+        Does NOT depend on EventStore.get() — safe to call after reset().
+        """
+        try:
+            seed = (
+                self.type.name,
+                self.entity_hash,
+                self.parent_refs,
+                self.hash_mode.name,
+            )
+            data = json.dumps(seed, sort_keys=True, default=list)
+            expected = hashlib.sha256(data.encode()).hexdigest()
+            return expected == self.event_id
+        except Exception:
+            return False
     def causal_ancestry(self) -> set[str]:
         ancestors: set[str] = set()
         stack = list(self.parent_refs)
@@ -107,12 +123,16 @@ class EventStore:
     _events: dict[str, Event] = {}
     _by_entity: dict[str, list[str]] = {}
     _by_type: dict[EventType, list[str]] = {}
+    _lock: threading.RLock = threading.RLock()
+    _version: int = 0   # increments on each write, for snapshot versioning
 
     @classmethod
     def reset(cls) -> None:
-        cls._events.clear()
-        cls._by_entity.clear()
-        cls._by_type.clear()
+        with cls._lock:
+            cls._events.clear()
+            cls._by_entity.clear()
+            cls._by_type.clear()
+            cls._version = 0
 
     @classmethod
     def emit(
@@ -126,8 +146,11 @@ class EventStore:
         consensus_ref: str = "",
         metadata: Sequence[str] | None = None,
     ) -> Event:
-        seed = (event_type.name, entity_hash, tuple(parent_refs or []), hash_mode.name, time.time_ns())
+        ts_ns = time.time_ns()
+        # event_id is deterministic: no timestamp (timestamp is metadata, not identity)
+        seed = (event_type.name, entity_hash, tuple(parent_refs or []), hash_mode.name)
         eid = hashlib.sha256(json.dumps(seed, sort_keys=True, default=list).encode()).hexdigest()
+
         event = Event(
             event_id=eid,
             type=event_type,
@@ -137,52 +160,85 @@ class EventStore:
             trust_context=trust_context,
             proof_ref=proof_ref,
             consensus_ref=consensus_ref,
+            timestamp_ns=ts_ns,
             metadata=tuple(metadata or []),
         )
-        cls._events[eid] = event
-        cls._by_entity.setdefault(entity_hash, []).append(eid)
-        cls._by_type.setdefault(event_type, []).append(eid)
-        return event
+
+        with cls._lock:
+            if eid in cls._events:
+                return cls._events[eid]
+
+            cls._events[eid] = event
+
+            if entity_hash not in cls._by_entity:
+                cls._by_entity[entity_hash] = []
+            cls._by_entity[entity_hash].append(eid)
+
+            if event_type not in cls._by_type:
+                cls._by_type[event_type] = []
+            cls._by_type[event_type].append(eid)
+
+            cls._version += 1
+            return event
 
     @classmethod
     def get(cls, event_id: str) -> Event | None:
-        return cls._events.get(event_id)
+        with cls._lock:
+            return cls._events.get(event_id)
 
     @classmethod
     def query_entity(cls, entity_hash: str) -> list[Event]:
-        return [cls._events[eid] for eid in cls._by_entity.get(entity_hash, [])]
+        with cls._lock:
+            return [
+                cls._events[eid]
+                for eid in cls._by_entity.get(entity_hash, [])
+                if eid in cls._events
+            ]
 
     @classmethod
     def size(cls) -> int:
-        return len(cls._events)
-
-    @classmethod
-    def query_entity(cls, entity_hash: str) -> list[Event]:
-        return [cls._events[eid] for eid in cls._by_entity.get(entity_hash, []) if eid in cls._events]
+        with cls._lock:
+            return len(cls._events)
 
     @classmethod
     def resolve(cls, entity_hash: str) -> "SemanticProjection" | None:
-        events = cls.query_entity(entity_hash)
-        if not events:
-            return None
-        mapped: dict[EventType, list[Event]] = {et: [] for et in EventType.all()}
-        for event in events:
-            mapped[event.type].append(event)
-        canonical = None
-        for et in [EventType.CONSENSUS, EventType.GOSSIP, EventType.PROOF, EventType.REPLAY, EventType.TRUST]:
-            if mapped[et]:
-                canonical = max(mapped[et], key=lambda e: e.timestamp_ns)
-                break
-        projection = SemanticProjection(
-            entity_hash=entity_hash,
-            canonical=canonical,
-            gossip_events=mapped[EventType.GOSSIP],
-            consensus_events=mapped[EventType.CONSENSUS],
-            proof_events=mapped[EventType.PROOF],
-            replay_events=mapped[EventType.REPLAY],
-            trust_events=mapped[EventType.TRUST],
-        )
-        return projection
+        with cls._lock:
+            entity_eids = cls._by_entity.get(entity_hash, [])
+            if not entity_eids:
+                return None
+
+            mapped: dict[EventType, list[Event]] = {et: [] for et in EventType.all()}
+            for eid in entity_eids:
+                if eid in cls._events:
+                    mapped[cls._events[eid].type].append(cls._events[eid])
+
+            # CONSENSUS takes priority as canonical; then GOSSIP, then others
+            canonical = None
+            for et in [EventType.CONSENSUS, EventType.GOSSIP, EventType.PROOF, EventType.REPLAY, EventType.TRUST]:
+                if mapped[et]:
+                    canonical = max(mapped[et], key=lambda e: e.timestamp_ns)
+                    break
+
+            return SemanticProjection(
+                entity_hash=entity_hash,
+                canonical=canonical,
+                gossip_events=mapped[EventType.GOSSIP],
+                consensus_events=mapped[EventType.CONSENSUS],
+                proof_events=mapped[EventType.PROOF],
+                replay_events=mapped[EventType.REPLAY],
+                trust_events=mapped[EventType.TRUST],
+            )
+
+    @classmethod
+    def snapshot(cls) -> dict:
+        """Return a consistent point-in-time snapshot of all indices."""
+        with cls._lock:
+            return {
+                "version": cls._version,
+                "events": dict(cls._events),
+                "by_entity": {k: list(v) for k, v in cls._by_entity.items()},
+                "by_type": {k: list(v) for k, v in cls._by_type.items()},
+            }
 
 
 @dataclass(frozen=True)
