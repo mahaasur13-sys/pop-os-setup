@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 import time
+import hashlib
 
 from .message_signatures import FederationMessageSigning, SignedMessage
 from .quorum import QuorumCalculator, QuorumType
@@ -176,27 +177,36 @@ class PBFTLiteConsensusEngine:
 
     def on_prepare(self, msg: PBFTMessage) -> tuple[bool, Optional[PBFTMessage]]:
         """
-        Accumulate PREPARE. If 2f+1 for same digest (including self) → transition to COMMIT.
-        Self-vote is always implicitly counted: the node that sent PRE_PREPARE is
-        guaranteed to have voted PREPARE for its own value.
+        Accumulate PREPARE. If 2f+1 for same digest → transition to COMMIT.
+        Quorum includes self (leader who sent PRE_PREPARE).
+
+        Validates:
+        - phase is PREPARE
+        - view matches
+        - digest matches leader's PRE_PREPARE (equivocation detection)
+
+        Build prepare_certificate for COMMIT phase:
+        - digest must match _current_digest (locked from PRE_PREPARE)
+        - certificate = hash(sorted([all_prepare_digests])) → ensures all voters committed to same digest
         """
         if self._phase != PBFTPhase.PREPARE:
             return False, None
         if msg.view != self._view:
             return False, None
         if msg.digest != self._current_digest:
-            return False, None
+            return False, None  # ← equivocation: voter sent different digest → reject
 
         self._prepare_queue.append(msg)
         f = QuorumCalculator.compute_f(self.n_nodes)
         threshold = 2 * f + 1
 
-        # Quorum includes self. Self's own PREPARE is implicit (leader sent PRE_PREPARE
-        # to itself and entered PREPARE state). Count: external PREPARE messages + 1 self.
-        if len(self._prepare_queue) + 1 >= threshold:
+        if len(self._prepare_queue) + 1 >= threshold:  # +1 = self (leader)
             self._phase = PBFTPhase.COMMIT
             self._commit_queue.clear()
-            return True, self._make_msg(PBFTPhase.COMMIT, self._view, msg.digest, msg.round_num)
+            # Prepare certificate: hash of sorted prepare digests for commit binding
+            digests = sorted([m.digest for m in self._prepare_queue] + [self._current_digest])
+            self._prepare_certificate = hashlib.sha256("".join(digests).encode()).hexdigest()[:16]
+            return True, self._make_msg(PBFTPhase.COMMIT, self._view, self._current_digest, self._round)
 
         return True, None
 

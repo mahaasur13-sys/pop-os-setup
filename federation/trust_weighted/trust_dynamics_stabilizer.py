@@ -176,15 +176,32 @@ class AntiMonopolyConstraint:
             gradient = dom_fraction - self._prev_dom_fraction
 
         adjusted_trust = dict(proposed_trust)
+        total = snapshot.total_weight if snapshot else sum(proposed_trust.values())
 
-        # Step 1: gradient cap — scale all adjustments if gradient exceeds limit
-        if abs(gradient) > self.gradient_cap and self._prev_dom_node is not None:
-            scale = self.gradient_cap / abs(gradient)
-            for node_id in adjusted_trust:
-                adjusted_trust[node_id] *= scale
+        # ── Step 1: Gradient cap ──────────────────────────────────────────────
+        # If dominant node's fraction grew faster than gradient_cap, scale all
+        # proposed values proportionally to limit the growth rate while
+        # preserving the relative distribution (no renormalization drift).
+        dominant_trust = max(proposed_trust.values()) if proposed_trust else 0.0
+        if self._prev_dom_node is not None and dominant_trust > 0 and total > 0:
+            # current dominant fraction (before this update)
+            prev_dom_fraction = self._prev_dom_fraction
+            # new dominant fraction (from proposed_trust)
+            new_dom_fraction = max(
+                proposed_trust.get(n, 0.0) for n in [self._prev_dom_node]
+            ) / total
+            gradient = new_dom_fraction - prev_dom_fraction
+            if abs(gradient) > self.gradient_cap:
+                scale = self.gradient_cap / abs(gradient)
+                for n in adjusted_trust:
+                    adjusted_trust[n] *= scale
+                # Note: scale < 1 shrinks total mass — this is intentional.
+                # The dominant node's growth is limited; shrinkage is accepted
+                # as it reflects dampened trust accumulation.
 
-        # Step 2: dominance cap — hard ceiling on any single node's weight fraction
+        # ── Step 2: Dominance cap — hard ceiling ──────────────────────────────
         for node_id, trust in proposed_trust.items():
+            total = snapshot.total_weight if snapshot else 1.0
             if total > 0.0:
                 weight_fraction = trust / total
             else:

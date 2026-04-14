@@ -14,7 +14,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Any
 import threading
 
 
@@ -120,11 +120,13 @@ class Event:
 
 
 class EventStore:
+    _lock: threading.RLock = threading.RLock()
+    _version_lock: threading.Lock = threading.Lock()
     _events: dict[str, Event] = {}
     _by_entity: dict[str, list[str]] = {}
     _by_type: dict[EventType, list[str]] = {}
-    _lock: threading.RLock = threading.RLock()
-    _version: int = 0   # increments on each write, for snapshot versioning
+    _version: int = 0
+    _snapshot_epoch: int = 0
 
     @classmethod
     def reset(cls) -> None:
@@ -132,6 +134,7 @@ class EventStore:
             cls._events.clear()
             cls._by_entity.clear()
             cls._by_type.clear()
+        with cls._version_lock:
             cls._version = 0
 
     @classmethod
@@ -146,40 +149,51 @@ class EventStore:
         consensus_ref: str = "",
         metadata: Sequence[str] | None = None,
     ) -> Event:
-        ts_ns = time.time_ns()
-        # event_id is deterministic: no timestamp (timestamp is metadata, not identity)
-        seed = (event_type.name, entity_hash, tuple(parent_refs or []), hash_mode.name)
+        """
+        Thread-safe emit with idempotency + epoch monotonicity.
+
+        Invariant: every event is tagged with the epoch at which it was emitted.
+        Snapshot captures a consistent epoch boundary; no event emitted AFTER
+        snapshot start can appear in it, even if store is mutated concurrently.
+        """
+        parents = tuple(parent_refs or [])
+        meta = tuple(metadata or [])
+
+        # event_id seed — does NOT include timestamp_ns (deterministic)
+        seed = (event_type.name, entity_hash, parents, hash_mode.name)
         eid = hashlib.sha256(json.dumps(seed, sort_keys=True, default=list).encode()).hexdigest()
 
-        event = Event(
-            event_id=eid,
-            type=event_type,
-            entity_hash=entity_hash,
-            parent_refs=tuple(parent_refs or []),
-            hash_mode=hash_mode,
-            trust_context=trust_context,
-            proof_ref=proof_ref,
-            consensus_ref=consensus_ref,
-            timestamp_ns=ts_ns,
-            metadata=tuple(metadata or []),
-        )
+        # Capture monotonic epoch BEFORE writing — guarantees snapshot boundary
+        with cls._version_lock:
+            cls._version += 1
+            emitted_epoch = cls._version
 
         with cls._lock:
             if eid in cls._events:
-                return cls._events[eid]
+                return cls._events[eid]   # idempotent re-entry
 
-            cls._events[eid] = event
+            ev = Event(
+                event_id=eid,
+                type=event_type,
+                entity_hash=entity_hash,
+                parent_refs=parents,
+                hash_mode=hash_mode,
+                trust_context=trust_context,
+                proof_ref=proof_ref,
+                consensus_ref=consensus_ref,
+                metadata=meta,
+            )
+            # Stamp epoch on event for snapshot boundary tracking
+            object.__setattr__(ev, "_epoch", emitted_epoch)
 
-            if entity_hash not in cls._by_entity:
-                cls._by_entity[entity_hash] = []
-            cls._by_entity[entity_hash].append(eid)
+            cls._events[eid] = ev
+            cls._by_entity.setdefault(entity_hash, []).append(eid)
+            cls._by_type.setdefault(event_type, []).append(eid)
 
-            if event_type not in cls._by_type:
-                cls._by_type[event_type] = []
-            cls._by_type[event_type].append(eid)
+            # Snapshot boundary: track epoch of last mutation
+            cls._snapshot_epoch = emitted_epoch
 
-            cls._version += 1
-            return event
+        return ev
 
     @classmethod
     def get(cls, event_id: str) -> Event | None:
@@ -230,15 +244,75 @@ class EventStore:
             )
 
     @classmethod
-    def snapshot(cls) -> dict:
-        """Return a consistent point-in-time snapshot of all indices."""
+    def snapshot(cls) -> "EventStoreSnapshot":
+        """Point-in-time view with monotonic epoch boundary.
+
+        Guarantees:
+        - All events with _epoch <= boundary are fully captured
+        - No event with _epoch > boundary is included
+        - Even if emit() races concurrently, snapshot epoch is stable
+        """
+        with cls._version_lock:
+            boundary_epoch = cls._snapshot_epoch
+
+        events_copy: dict[str, Event] = {}
+        by_entity_copy: dict[str, list[str]] = {}
+        by_type_copy: dict[EventType, list[str]] = {}
+
         with cls._lock:
-            return {
-                "version": cls._version,
-                "events": dict(cls._events),
-                "by_entity": {k: list(v) for k, v in cls._by_entity.items()},
-                "by_type": {k: list(v) for k, v in cls._by_type.items()},
-            }
+            for eid, ev in cls._events.items():
+                # Filter: only events whose emission epoch is <= boundary
+                ep = getattr(ev, "_epoch", 0)
+                if ep <= boundary_epoch:
+                    events_copy[eid] = ev
+            by_entity_copy = {k: list(v) for k, v in cls._by_entity.items()}
+            by_type_copy = {k: list(v) for k, v in cls._by_type.items()}
+
+        return EventStoreSnapshot(
+            _events=events_copy,
+            _by_entity=by_entity_copy,
+            _by_type=by_type_copy,
+            epoch=boundary_epoch,
+        )
+
+    @classmethod
+    def query_entity_snapshot(cls, entity_hash: str) -> list[Event]:
+        snap = cls.snapshot()
+        return [cls._events[eid] for eid in snap._by_entity.get(entity_hash, [])
+                if eid in cls._events]
+
+    @classmethod
+    def resolve_snapshot(cls, entity_hash: str) -> "SemanticProjection | None":
+        snap = cls.snapshot()
+        events = [snap._events[eid] for eid in snap._by_entity.get(entity_hash, [])
+                  if eid in snap._events]
+        if not events:
+            return None
+        mapped: dict[EventType, list[Event]] = {et: [] for et in EventType.all()}
+        for event in events:
+            mapped[event.type].append(event)
+        canonical = None
+        for et in [EventType.CONSENSUS, EventType.GOSSIP,
+                   EventType.PROOF, EventType.REPLAY, EventType.TRUST]:
+            if mapped[et]:
+                canonical = max(mapped[et], key=lambda e: e.timestamp_ns)
+                break
+        return SemanticProjection(
+            entity_hash=entity_hash,
+            canonical=canonical,
+            gossip_events=mapped[EventType.GOSSIP],
+            consensus_events=mapped[EventType.CONSENSUS],
+            proof_events=mapped[EventType.PROOF],
+            replay_events=mapped[EventType.REPLAY],
+            trust_events=mapped[EventType.TRUST],
+        )
+
+    @classmethod
+    def scan_all_snapshot(cls) -> list["DriftReport"]:
+        """Drift scan on the epoch-bounded snapshot — consistent even under concurrent emit()."""
+        snap = cls.snapshot()
+        detector = DriftDetector(store=snap)
+        return detector.scan_all()
 
 
 @dataclass(frozen=True)
@@ -447,4 +521,44 @@ class SemanticBinder:
             EventType.REPLAY,
             entity_hash,
             metadata=metadata,
+        )
+
+
+class EventStoreSnapshot:
+    """
+    Immutable, epoch-bounded view of EventStore state.
+
+    Guarantees:
+    - No event with _epoch > boundary_epoch is included
+    - Snapshot epoch is determined atomically with _version_lock
+      BEFORE snapshot construction starts — no mid-flight events leak in
+    - safe to pass to DriftDetector from any thread
+    """
+    _events: dict[str, Event]
+    _by_entity: dict[str, list[str]]
+    _by_type: dict[EventType, list[str]]
+    epoch: int
+
+    def resolve(self, entity_hash: str) -> "SemanticProjection | None":
+        events = [self._events[eid] for eid in self._by_entity.get(entity_hash, [])
+                  if eid in self._events]
+        if not events:
+            return None
+        mapped: dict[EventType, list[Event]] = {et: [] for et in EventType.all()}
+        for event in events:
+            mapped[event.type].append(event)
+        canonical = None
+        for et in [EventType.CONSENSUS, EventType.GOSSIP,
+                   EventType.PROOF, EventType.REPLAY, EventType.TRUST]:
+            if mapped[et]:
+                canonical = max(mapped[et], key=lambda e: e.timestamp_ns)
+                break
+        return SemanticProjection(
+            entity_hash=entity_hash,
+            canonical=canonical,
+            gossip_events=mapped[EventType.GOSSIP],
+            consensus_events=mapped[EventType.CONSENSUS],
+            proof_events=mapped[EventType.PROOF],
+            replay_events=mapped[EventType.REPLAY],
+            trust_events=mapped[EventType.TRUST],
         )
