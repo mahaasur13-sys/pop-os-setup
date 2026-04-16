@@ -26,10 +26,32 @@ import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
+from pathlib import Path
+import sys
 
 from .branch import Branch, BranchStatus, BranchPoint, BranchStore
 from .equivalence import MergeDecision, Decision, EquivalenceChecker, BranchSummary, CheckpointSnapshot
 from .rollback_engine_v2 import RollbackResult, RollbackType
+
+
+# ── Stage function: G3 alignment — called ONLY from ExecutionGateway ──────
+
+def apply_merge_alignment(
+    decision: MergeDecision,
+    branch_store: BranchStore,
+    event_store: Any,
+) -> MergeLog:
+    """
+    Pure stage function for ExecutionGateway G3 stage.
+    Executes merge decision produced by equivalence.py.
+    All execution MUST route through ExecutionGateway.
+    """
+    engine = MergeEngine(branch_store, event_store)
+    if decision.decision == Decision.MERGE:
+        return engine._do_merge(decision)
+    if decision.decision in (Decision.KEEP_A, Decision.KEEP_B):
+        return engine._do_keep(decision, keep_branch="a" if decision.decision == Decision.KEEP_A else "b")
+    return engine._do_split(decision)
 
 
 # ── Merge artifacts ─────────────────────────────────────────────────────────
@@ -101,24 +123,6 @@ class MergeEngine:
         self._events = event_store
         self._equiv = equivalence_checker or EquivalenceChecker()
         self._logs: list[MergeLog] = []
-
-    def execute(self, decision: MergeDecision) -> MergeLog:
-        """
-        Execute a merge decision.
-        
-        Handles all four decision types:
-          MERGE  → create new converged branch from both sources
-          KEEP_A → mark B as SUPERSEDED, keep A
-          KEEP_B → mark A as SUPERSEDED, keep B
-          SPLIT  → mark both as IRRECONCILABLE, no convergence
-        """
-        if decision.decision == Decision.MERGE:
-            return self._do_merge(decision)
-        if decision.decision == Decision.KEEP_A:
-            return self._do_keep(decision, keep_branch="a")
-        if decision.decision == Decision.KEEP_B:
-            return self._do_keep(decision, keep_branch="b")
-        return self._do_split(decision)
 
     # ── MERGE ───────────────────────────────────────────────────────────────
 

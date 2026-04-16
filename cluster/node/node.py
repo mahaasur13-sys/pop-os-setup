@@ -243,27 +243,26 @@ class ClusterNode:
 
     # ── Command execution ─────────────────────────────────────────────────
 
-    def execute(self, command: str) -> str:
-        """Execute a command through SBS enforcer."""
-        self.logger.info("execute", command=command)
+    # NOTE: execute() REMOVED in v9.0
+    # All mutations MUST route through ExecutionGateway only.
+    # RPC handlers use _gateway_forward() below.
 
-        state = self._build_state()
+    def _gateway_forward(self, command: str) -> str:
+        """
+        Thin proxy: forwards command to ExecutionGateway.
+        Node layer produces NO state mutations — only routing.
+        """
         try:
-            enforced = self.sbs.enforce("pre_exec", state)
-            if not enforced:
-                violations = self.sbs.get_violations_summary()
-                return f"SBS violation: {violations}"
+            import sys as _sys
+            _sys.path.insert(0, "/home/workspace/atom-federation-os")
+            from orchestration.ExecutionGateway.execution_gateway import ExecutionGateway
+            gw = ExecutionGateway()
+            result = gw.execute(command)
+            if not result.final_passed:
+                return f"BLOCKED by {result.block_gate}: {result.block_reason}"
+            return f"ok({self.node_id}): {command}"
         except Exception as e:
-            self.logger.error("sbs_enforce_error", error=str(e))
-            return f"error: {e}"
-
-        result = f"ok({self.node_id}): {command}"
-
-        state["desc"]["commit_index"] = self.commit_index + 1
-        self.sbs.enforce("post_exec", state)
-
-        self.commit_index += 1
-        return result
+            return f"gateway_error({self.node_id}): {e}"
 
     def _build_state(self) -> dict:
         return {
@@ -281,7 +280,7 @@ class ClusterNode:
     def handle_forward(self, command: str) -> str:
         """Handle inbound Forward RPC."""
         self._forwarded_count += 1
-        return self.execute(command)
+        return self._gateway_forward(command)
 
     def get_state_query(self) -> str:
         """Return serialized state for peer state sync."""

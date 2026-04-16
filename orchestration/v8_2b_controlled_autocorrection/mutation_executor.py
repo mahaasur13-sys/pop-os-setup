@@ -7,6 +7,8 @@ from enum import Enum
 from typing import Callable, Optional, Protocol
 
 import numpy as np
+from pathlib import Path
+import sys
 
 from .severity_mapper import MutationClass, SeverityActionMapper
 from .policy_selector import MutationPolicy, PolicySelector, PolicyMode
@@ -108,7 +110,148 @@ class MutationExecutor:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    def execute(
+    def apply_mutation(
+        self,
+        drift_score: float,
+        health_score: float,
+        mutation_density: float,
+        coherence_drop: float,
+        oscillation_detected: bool,
+        recent_outcome: Optional[str] = None,
+        pre_check_passed: bool = False,
+    ) -> ExecutionResult:
+        """
+        Gateway-facing mutation API — called by ExecutionGateway ACT stage.
+
+        Replaces the old execute() entry point which is now deleted.
+        All safety checks (G1–G6, G8–G10) are handled by the Gateway;
+        this method performs ONLY the parameter-space delta application.
+
+        Raises:
+            SystemIntegrityViolation: if called outside ExecutionGateway
+        """
+        # ── P4: Runtime Self-Verification ────────────────────────────────────
+        # This is UNDISABLEABLE. Even if Gateway entry is bypassed somehow,
+        # MutationExecutor refuses to act outside ExecutionGateway context.
+        from core.runtime.runtime_guard import RuntimeExecutionGuard
+        RuntimeExecutionGuard.assert_in_gateway_context()
+
+        return self._execute_internal(
+            drift_score=drift_score,
+            health_score=health_score,
+            mutation_density=mutation_density,
+            coherence_drop=coherence_drop,
+            oscillation_detected=oscillation_detected,
+            recent_outcome=recent_outcome,
+            pre_check_passed=pre_check_passed,
+        )
+
+    def current_theta(self) -> np.ndarray:
+        return self._theta.copy()
+
+    # ── Stage functions (called ONLY from ExecutionGateway ACT stage) ───────
+
+    # ── Delta generation ───────────────────────────────────────────────────
+
+    def _generate_delta(
+        self, mutation_class: MutationClass, policy: MutationPolicy, theta: np.ndarray
+    ) -> np.ndarray:
+        rng = np.random.default_rng()
+
+        if mutation_class == MutationClass.RETUNE:
+            max_eps = (
+                self._config.override_retune_epsilon
+                or policy.max_retune_epsilon
+            )
+            # Random direction, ε-magnitude
+            direction = rng.choice([-1, 1], size=theta.shape)
+            magnitude = rng.uniform(0.1, 1.0) * max_eps
+            return direction * magnitude * np.abs(theta.clip(min=1e-8))
+
+        elif mutation_class == MutationClass.REWEIGHT:
+            clip = self._config.override_reweight_clip or policy.reweight_clip_ratio
+            return rng.uniform(-clip, clip, size=theta.shape)
+
+        elif mutation_class == MutationClass.REPLAN:
+            horizon_frac = policy.replan_horizon_fraction
+            horizon_n = max(1, int(len(theta) * horizon_frac))
+            delta = np.zeros_like(theta)
+            delta[:horizon_n] = rng.uniform(-0.5, 0.5, size=horizon_n)
+            return delta
+
+        else:  # RESET
+            blend = policy.reset_ref_weight
+            ref = rng.standard_normal(size=theta.shape) * 0.5
+            return blend * ref - (1 - blend) * theta
+
+    @staticmethod
+    def _default_update_fn(
+        theta: np.ndarray, delta: np.ndarray, health: float
+    ) -> np.ndarray:
+        scale = max(health, 0.1)
+        return theta + scale * delta
+
+    # ── Result factories ────────────────────────────────────────────────────
+
+    def _blocked_result(
+        self, mutation_class: MutationClass, ctx, policy
+    ) -> ExecutionResult:
+        self._exec_counter += 1
+        return ExecutionResult(
+            execution_id=f"exec_{self._exec_counter:04d}_{mutation_class.value}",
+            mutation_class=mutation_class,
+            status=ExecutionStatus.BLOCKED,
+            theta_before=tuple(self._theta),
+            theta_after=tuple(self._theta),
+            delta_norm_l2=0.0,
+            policy_violated=False,
+            error_message="Safety gate blocked mutation",
+        )
+
+    def _failed_result(
+        self, mutation_class: MutationClass, policy, theta_before, exc: Exception
+    ) -> ExecutionResult:
+        self._exec_counter += 1
+        return ExecutionResult(
+            execution_id=f"exec_{self._exec_counter:04d}_{mutation_class.value}",
+            mutation_class=mutation_class,
+            status=ExecutionStatus.FAILED,
+            theta_before=tuple(theta_before),
+            theta_after=tuple(self._theta),
+            delta_norm_l2=0.0,
+            policy_violated=False,
+            error_message=str(exc),
+        )
+
+    def _rollback_result(
+        self,
+        mutation_class: MutationClass,
+        policy: MutationPolicy,
+        theta_before: np.ndarray,
+        theta_after: np.ndarray,
+        delta_norm: float,
+    ) -> ExecutionResult:
+        self._exec_counter += 1
+        return ExecutionResult(
+            execution_id=f"exec_{self._exec_counter:04d}_{mutation_class.value}_rb",
+            mutation_class=mutation_class,
+            status=ExecutionStatus.ROLLED_BACK,
+            theta_before=tuple(theta_before),
+            theta_after=tuple(theta_after),
+            delta_norm_l2=delta_norm,
+            policy_violated=policy.rollback_on_violation,
+            error_message="Invariant violation — rolled back",
+        )
+
+    def _fire_callback(self, result: ExecutionResult):
+        if result.status == ExecutionStatus.SUCCESS and self._config.on_success:
+            self._config.on_success(result)
+        if result.status == ExecutionStatus.ROLLED_BACK and self._config.on_rollback:
+            self._config.on_rollback(result)
+
+    # ── Internal implementation (called by Gateway ACT stage) ─────────────
+
+    def _execute_internal(
         self,
         drift_score: float,
         health_score: float,
@@ -224,104 +367,3 @@ class MutationExecutor:
 
         self._fire_callback(result)
         return result
-
-    def current_theta(self) -> np.ndarray:
-        return self._theta.copy()
-
-    # ── Delta generation ───────────────────────────────────────────────────
-
-    def _generate_delta(
-        self, mutation_class: MutationClass, policy: MutationPolicy, theta: np.ndarray
-    ) -> np.ndarray:
-        rng = np.random.default_rng()
-
-        if mutation_class == MutationClass.RETUNE:
-            max_eps = (
-                self._config.override_retune_epsilon
-                or policy.max_retune_epsilon
-            )
-            # Random direction, ε-magnitude
-            direction = rng.choice([-1, 1], size=theta.shape)
-            magnitude = rng.uniform(0.1, 1.0) * max_eps
-            return direction * magnitude * np.abs(theta.clip(min=1e-8))
-
-        elif mutation_class == MutationClass.REWEIGHT:
-            clip = self._config.override_reweight_clip or policy.reweight_clip_ratio
-            return rng.uniform(-clip, clip, size=theta.shape)
-
-        elif mutation_class == MutationClass.REPLAN:
-            horizon_frac = policy.replan_horizon_fraction
-            horizon_n = max(1, int(len(theta) * horizon_frac))
-            delta = np.zeros_like(theta)
-            delta[:horizon_n] = rng.uniform(-0.5, 0.5, size=horizon_n)
-            return delta
-
-        else:  # RESET
-            blend = policy.reset_ref_weight
-            ref = rng.standard_normal(size=theta.shape) * 0.5
-            return blend * ref - (1 - blend) * theta
-
-    @staticmethod
-    def _default_update_fn(
-        theta: np.ndarray, delta: np.ndarray, health: float
-    ) -> np.ndarray:
-        scale = max(health, 0.1)
-        return theta + scale * delta
-
-    # ── Result factories ────────────────────────────────────────────────────
-
-    def _blocked_result(
-        self, mutation_class: MutationClass, ctx, policy
-    ) -> ExecutionResult:
-        self._exec_counter += 1
-        return ExecutionResult(
-            execution_id=f"exec_{self._exec_counter:04d}_{mutation_class.value}",
-            mutation_class=mutation_class,
-            status=ExecutionStatus.BLOCKED,
-            theta_before=tuple(self._theta),
-            theta_after=tuple(self._theta),
-            delta_norm_l2=0.0,
-            policy_violated=False,
-            error_message="Safety gate blocked mutation",
-        )
-
-    def _failed_result(
-        self, mutation_class: MutationClass, policy, theta_before, exc: Exception
-    ) -> ExecutionResult:
-        self._exec_counter += 1
-        return ExecutionResult(
-            execution_id=f"exec_{self._exec_counter:04d}_{mutation_class.value}",
-            mutation_class=mutation_class,
-            status=ExecutionStatus.FAILED,
-            theta_before=tuple(theta_before),
-            theta_after=tuple(self._theta),
-            delta_norm_l2=0.0,
-            policy_violated=False,
-            error_message=str(exc),
-        )
-
-    def _rollback_result(
-        self,
-        mutation_class: MutationClass,
-        policy: MutationPolicy,
-        theta_before: np.ndarray,
-        theta_after: np.ndarray,
-        delta_norm: float,
-    ) -> ExecutionResult:
-        self._exec_counter += 1
-        return ExecutionResult(
-            execution_id=f"exec_{self._exec_counter:04d}_{mutation_class.value}_rb",
-            mutation_class=mutation_class,
-            status=ExecutionStatus.ROLLED_BACK,
-            theta_before=tuple(theta_before),
-            theta_after=tuple(theta_after),
-            delta_norm_l2=delta_norm,
-            policy_violated=policy.rollback_on_violation,
-            error_message="Invariant violation — rolled back",
-        )
-
-    def _fire_callback(self, result: ExecutionResult):
-        if result.status == ExecutionStatus.SUCCESS and self._config.on_success:
-            self._config.on_success(result)
-        if result.status == ExecutionStatus.ROLLED_BACK and self._config.on_rollback:
-            self._config.on_rollback(result)
