@@ -1,158 +1,140 @@
-"""
-state_window_store.py
-~~~~~~~~~~~~~~~~~~~~~
-Sliding-window state store for tick-based control loops.
-Keeps a bounded history of system snapshots to enable:
-  - temporal aggregation (avg stability over window)
-  - rollback to recent tick
-  - state evolution tracking across ticks
+# ATOMFEDERATION-OS - StateWindowStore
+# SQLite with WAL - Persistent, Append-Only, Thread-Safe
+# =========================================================
 
-Invariant: S(t) = f(S(t-1), decision(t-1), outcome(t-1))
-"""
+import sqlite3
+import threading
+from pathlib import Path
+from typing import Optional, Any
+from dataclasses import dataclass
+from datetime import datetime
 
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import Any, Optional
-from collections import deque
-import time
+from orchestration.execution_gateway import ExecutionGateway, SafetyViolationError
 
 
 @dataclass
-class TickState:
+class TickRecord:
     tick: int
-    source_states: dict[str, float]          # source_name -> stability_score [0,1]
-    control_weights: dict[str, float]       # source_name -> effective_priority
-    global_gain: float
-    outcome: Optional[float] = None         # None until outcome is recorded
-    timestamp: float = field(default_factory=time.time)
+    state: bytes
+    decision: Optional[bytes] = None
+    outcome: Optional[bytes] = None
+    recorded_at: Optional[str] = None
 
 
 class StateWindowStore:
-    """
-    Sliding-window state store.
+    # =========================================================
+    # PERSISTENT STATE WINDOW — SQLite WAL
+    # Append-only ledger with hard durability guarantees
+    # =========================================================
 
-    Tracks the last N ticks of system state so that:
-      - Temporal verification has history to compare against
-      - Proof feedback can access previous decisions/outcomes
-      - Gain scheduler has a window for stability aggregation
-    """
+    def __init__(self, db_path: str = None, gateway: ExecutionGateway = None):
+        if db_path is None:
+            db_path = Path.home() / '.atom_federation' / 'state_window.db'
 
-    def __init__(self, window_size: int = 100) -> None:
-        self._window_size = window_size
-        self._deque: deque[TickState] = deque(maxlen=window_size)
-        self._tick_counter = 0
+        self._db_path = str(db_path)
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # ─── core interface ───────────────────────────────────────────────────────
+        # FIX: Use default isolation (deferred) for WAL compatibility
+        # IMMEDIATE + WAL = undefined behavior in high-concurrency
+        # deferred + WAL = safe concurrent readers + exclusive writer
+        self._conn = sqlite3.connect(
+            self._db_path,
+            timeout=30.0,
+            isolation_level=None  # autocommit mode, we control transactions
+        )
+        self._conn.execute('PRAGMA journal_mode=WAL;')
+        self._conn.execute('PRAGMA synchronous=NORMAL;')  # durable but fast
+        self._conn.execute('PRAGMA busy_timeout=30000;')  # 30s retry on lock
+        self._conn.execute('PRAGMA wal_autocheckpoint=1000;')  # checkpoint every 1000 pages
 
+        self._lock = threading.RLock()
+        self._create_table()
+        self._gateway = gateway or ExecutionGateway.instance()
+
+    def _create_table(self) -> None:
+        self._conn.execute('''
+            CREATE TABLE IF NOT EXISTS state_window (
+                tick INTEGER PRIMARY KEY,
+                state BLOB NOT NULL,
+                decision BLOB,
+                outcome BLOB,
+                recorded_at TEXT DEFAULT (datetime('now'))
+            )
+        ''')
+        self._conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_tick_desc 
+            ON state_window(tick DESC)
+        ''')
+
+    @ExecutionGateway.requires_gateway
     def record_tick(
         self,
-        source_states: dict[str, float],
-        control_weights: dict[str, float],
-        global_gain: float,
-        outcome: Optional[float] = None,
-    ) -> int:
-        """
-        Append a new tick snapshot.
-        Returns the assigned tick number.
-        """
-        self._tick_counter += 1
-        tick = self._tick_counter
-        self._deque.append(
-            TickState(
-                tick=tick,
-                source_states=dict(source_states),
-                control_weights=dict(control_weights),
-                global_gain=global_gain,
-                outcome=outcome,
+        tick: int,
+        state: bytes,
+        decision: Optional[bytes] = None,
+        outcome: Optional[bytes] = None
+    ) -> None:
+        with self._lock:
+            # FIX: Use explicit transaction for durability
+            self._conn.execute('BEGIN IMMEDIATE')  # acquire write lock
+            try:
+                self._conn.execute(
+                    'INSERT OR REPLACE INTO state_window (tick, state, decision, outcome) VALUES (?,?,?,?)',
+                    (tick, state, decision, outcome)
+                )
+                self._conn.execute('COMMIT')
+            except Exception:
+                self._conn.execute('ROLLBACK')
+                raise
+
+    @ExecutionGateway.requires_gateway
+    def get_tick(self, tick: int) -> Optional[TickRecord]:
+        with self._lock:
+            cursor = self._conn.execute(
+                'SELECT tick, state, decision, outcome, recorded_at FROM state_window WHERE tick = ?',
+                (tick,)
             )
-        )
-        return tick
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return TickRecord(
+                tick=row[0],
+                state=row[1],
+                decision=row[2],
+                outcome=row[3],
+                recorded_at=row[4]
+            )
 
-    def record_outcome(self, tick: int, outcome: float) -> bool:
-        """
-        Backfill an outcome for a past tick.
-        Returns False if tick not found in window.
-        """
-        for ts in self._deque:
-            if ts.tick == tick:
-                ts.outcome = outcome
-                return True
-        return False
+    @ExecutionGateway.requires_gateway
+    def get_window(self, from_tick: int, to_tick: int) -> list[TickRecord]:
+        with self._lock:
+            cursor = self._conn.execute(
+                '''SELECT tick, state, decision, outcome, recorded_at 
+                FROM state_window 
+                WHERE tick BETWEEN ? AND ? 
+                ORDER BY tick ASC''',
+                (from_tick, to_tick)
+            )
+            return [
+                TickRecord(
+                    tick=r[0], state=r[1], decision=r[2],
+                    outcome=r[3], recorded_at=r[4]
+                )
+                for r in cursor.fetchall()
+            ]
 
-    def get_tick(self, tick: int) -> Optional[TickState]:
-        for ts in self._deque:
-            if ts.tick == tick:
-                return ts
-        return None
+    @ExecutionGateway.requires_gateway
+    def get_latest_tick(self) -> Optional[int]:
+        with self._lock:
+            cursor = self._conn.execute(
+                'SELECT MAX(tick) FROM state_window'
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] is not None else None
 
-    def latest_tick(self) -> Optional[TickState]:
-        """Most recent tick or None if window is empty."""
-        return self._deque[-1] if self._deque else None
-
-    def window(self) -> list[TickState]:
-        """All ticks in window, oldest first."""
-        return list(self._deque)
-
-    # ─── derived queries ─────────────────────────────────────────────────────
-
-    def source_stability_series(
-        self, source: str, last_n: int | None = None
-    ) -> list[float]:
-        """Stability scores for a source over the last N ticks."""
-        ticks = list(self._deque)[-(last_n or self._window_size):]
-        return [t.source_states.get(source, 0.0) for t in ticks]
-
-    def outcome_series(self, last_n: int | None = None) -> list[float]:
-        """Outcome values (non-None) over the last N ticks."""
-        ticks = list(self._deque)[-(last_n or self._window_size):]
-        return [t.outcome for t in ticks if t.outcome is not None]
-
-    def avg_stability(self, last_n: int | None = None) -> float:
-        """Mean stability across all sources over last N ticks."""
-        ticks = list(self._deque)[-(last_n or self._window_size):]
-        if not ticks:
-            return 1.0
-        total = sum(
-            sum(s for s in t.source_states.values()) / max(len(t.source_states), 1)
-            for t in ticks
-        )
-        return total / len(ticks)
-
-    def avg_outcome(self, last_n: int | None = None) -> float | None:
-        """Mean outcome over last N ticks with recorded outcomes."""
-        ticks = list(self._deque)[-(last_n or self._window_size):]
-        outcomes = [t.outcome for t in ticks if t.outcome is not None]
-        return sum(outcomes) / len(outcomes) if outcomes else None
-
-    def tick_range(self, from_tick: int, to_tick: int) -> list[TickState]:
-        """Ticks in a closed interval [from_tick, to_tick]."""
-        return [t for t in self._deque if from_tick <= t.tick <= to_tick]
-
-    # ─── rollback ─────────────────────────────────────────────────────────────
-
-    def rollback_to(self, tick: int) -> list[TickState]:
-        """
-        Remove all ticks after `tick` and return them.
-        Allows replay of a decision sequence from an earlier point.
-        """
-        removed = [t for t in self._deque if t.tick > tick]
-        self._deque = deque(
-            (t for t in self._deque if t.tick <= tick),
-            maxlen=self._window_size,
-        )
-        return removed
-
-    # ─── introspection ─────────────────────────────────────────────────────────
-
-    @property
-    def window_size(self) -> int:
-        return self._window_size
-
-    @property
-    def depth(self) -> int:
-        return len(self._deque)
-
-    @property
-    def current_tick(self) -> int:
-        return self._tick_counter
+    def close(self) -> None:
+        with self._lock:
+            if self._conn:
+                self._conn.execute('PRAGMA wal_checkpoint(FULL);')
+                self._conn.close()
+                self._conn = None

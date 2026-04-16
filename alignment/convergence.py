@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import time
 import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
+
+from core.deterministic import DeterministicClock
 
 # ─────────────────────────────────────────────────────────────────
 # OSCILLATION DETECTOR
@@ -22,7 +23,7 @@ class OscillationState(Enum):
 class OscillationRecord:
     pair: tuple[str, str]
     cycle_count: int = 0
-    last_cycle_ts: float = field(default_factory=time.time)
+    last_cycle_ts: float = field(default_factory=DeterministicClock.get_tick)
     merge_history: list[float] = field(default_factory=list)
     state: OscillationState = OscillationState.STABLE
 
@@ -37,10 +38,10 @@ class OscillationDetector:
     Invariant: oscillation detection does NOT delete events.
     """
 
-    BACKOFF_BASE_SEC = 5.0
-    BACKOFF_MAX_SEC = 300.0
+    BACKOFF_BASE_TICKS = 5       # was BACKOFF_BASE_SEC = 5.0
+    BACKOFF_MAX_TICKS = 300      # was BACKOFF_MAX_SEC = 300.0
     OSCILLATION_THRESHOLD = 3
-    WINDOW_SEC = 600.0
+    WINDOW_TICKS = 600           # was WINDOW_SEC = 600.0
 
     def __init__(self):
         self._records: dict[tuple[str, str], OscillationRecord] = {}
@@ -48,15 +49,15 @@ class OscillationDetector:
 
     def record_merge(self, branch_a: str, branch_b: str) -> OscillationState:
         pair = tuple(sorted([branch_a, branch_b]))
-        now = time.time()
+        now_tick = DeterministicClock.get_tick()
         with self._lock:
             if pair not in self._records:
                 self._records[pair] = OscillationRecord(pair=pair)
             rec = self._records[pair]
-            rec.merge_history = [t for t in rec.merge_history if now - t < self.WINDOW_SEC]
-            rec.merge_history.append(now)
+            rec.merge_history = [t for t in rec.merge_history if now_tick - t < self.WINDOW_TICKS]
+            rec.merge_history.append(now_tick)
             rec.cycle_count = len(rec.merge_history)
-            rec.last_cycle_ts = now
+            rec.last_cycle_ts = float(now_tick)  # store tick as float for compatibility
             if rec.cycle_count >= self.OSCILLATION_THRESHOLD:
                 rec.state = OscillationState.OSCILLATING
             elif rec.cycle_count >= 2:
@@ -74,13 +75,14 @@ class OscillationDetector:
             if rec.state == OscillationState.SPLIT_FALLBACK:
                 return False, float('inf')
             if rec.state == OscillationState.OSCILLATING:
-                backoff_sec = min(
-                    self.BACKOFF_BASE_SEC * (2 ** (rec.cycle_count - self.OSCILLATION_THRESHOLD)),
-                    self.BACKOFF_MAX_SEC,
+                backoff_ticks = min(
+                    self.BACKOFF_BASE_TICKS * (2 ** (rec.cycle_count - self.OSCILLATION_THRESHOLD)),
+                    self.BACKOFF_MAX_TICKS,
                 )
-                backoff_until = rec.last_cycle_ts + backoff_sec
-                if time.time() < backoff_until:
-                    return False, backoff_until
+                backoff_until_tick = rec.last_cycle_ts + backoff_ticks
+                current_tick = float(DeterministicClock.get_tick())
+                if current_tick < backoff_until_tick:
+                    return False, backoff_until_tick
             return True, 0.0
 
     def force_split_fallback(self, branch_a: str, branch_b: str) -> bool:
@@ -143,7 +145,7 @@ class GlobalConsistencyOrder:
         decision: str,
         local_lamport: int,
     ) -> MergeCommitment:
-        merge_id = f"merge:{sorted([branch_a, branch_b])[0]}:{sorted([branch_a, branch_b])[1]}:{lca_snapshot_id}"
+        merge_id = f'merge:{sorted([branch_a, branch_b])[0]}:{sorted([branch_a, branch_b])[1]}:{lca_snapshot_id}'
         with self._lock:
             self._global_lamport = max(self._global_lamport, local_lamport) + 1
             commitment = MergeCommitment(
@@ -151,7 +153,7 @@ class GlobalConsistencyOrder:
                 branch_a=branch_a,
                 branch_b=branch_b,
                 lca_snapshot_id=lca_snapshot_id,
-                committed_at_ns=int(time.time() * 1e9),
+                committed_at_ns=DeterministicClock.get_tick_ns(),
                 lamport_commit_ts=self._global_lamport,
                 decision=decision,
             )
@@ -216,23 +218,23 @@ class EntropyController:
     FORCED_MERGE_BUDGET = 4
 
     def __init__(self):
-        self._branch_created_at: dict[str, float] = {}
+        self._branch_created_tick: dict[str, int] = {}
         self._forced_merge_count: int = 0
         self._lock = threading.RLock()
 
     def register_branch(self, branch_id: str) -> None:
         with self._lock:
-            self._branch_created_at[branch_id] = time.time()
+            self._branch_created_tick[branch_id] = DeterministicClock.get_tick()
 
     def mark_superseded(self, branch_id: str) -> None:
         with self._lock:
-            self._branch_created_at.pop(branch_id, None)
+            self._branch_created_tick.pop(branch_id, None)
 
     def evaluate_regime(self, active_branch_count: int, oscillated_pairs: int) -> EntropySnapshot:
-        now = time.time()
+        current_tick = DeterministicClock.get_tick()
         oldest_age = 0.0
-        if self._branch_created_at:
-            oldest_age = now - min(self._branch_created_at.values())
+        if self._branch_created_tick:
+            oldest_age = float(current_tick - min(self._branch_created_tick.values()))
         with self._lock:
             if active_branch_count >= self.MAX_ACTIVE_BRANCHES:
                 regime = EntropyRegime.EMERGENCY
@@ -244,7 +246,7 @@ class EntropyController:
                 regime = EntropyRegime.NOMINAL
             return EntropySnapshot(
                 active_branches=active_branch_count,
-                total_commits=len(self._branch_created_at),
+                total_commits=len(self._branch_created_tick),
                 oscillated_pairs=oscillated_pairs,
                 regime=regime,
                 oldest_branch_age_sec=oldest_age,
@@ -255,13 +257,13 @@ class EntropyController:
         if regime not in (EntropyRegime.CRITICAL, EntropyRegime.EMERGENCY):
             return False
         with self._lock:
-            created_at = self._branch_created_at.get(branch_id)
-            if created_at is None:
+            created_tick = self._branch_created_tick.get(branch_id)
+            if created_tick is None:
                 return False
-            now = time.time()
-            age = now - created_at
+            current_tick = DeterministicClock.get_tick()
+            age = current_tick - created_tick
             if regime == EntropyRegime.EMERGENCY:
-                return age > self.EMERGENCY_DEADLINE_SEC
+                return age > self.EMERGENCY_DEADLINE_SEC  # still in ticks as float
             elif regime == EntropyRegime.CRITICAL:
                 return (
                     age > self.MERGE_DEADLINE_SEC

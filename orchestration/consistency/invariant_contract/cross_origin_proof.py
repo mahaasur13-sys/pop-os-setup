@@ -17,13 +17,15 @@ Proof pipeline:
   SemanticProof result
 
 CROSS_ORIGIN_EQUIVALENCE (CRITICAL / QUARANTINE) — new top-level invariant.
+
+FIX-5: All IDs are content-addressed. Same proof content → same ID.
+       No uuid4() or time-based IDs in proof objects.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
-from uuid import uuid4
 import hashlib
 import time
 
@@ -33,6 +35,15 @@ from orchestration.consistency.invariant_contract.cross_mode_validator import (
     SemanticTree, SemanticNode, SemanticProjectionEngine,
     CrossModeValidator, EquivalenceResult,
 )
+
+
+def _content_id(prefix: str, *parts: str) -> str:
+    """
+    FIX-5: Deterministic content-addressed ID.
+    Same prefix + parts → same ID across all nodes and replay runs.
+    """
+    h = hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()[:12]
+    return f"{prefix}_{h}"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -58,10 +69,18 @@ class ProjectionStep:
     intermediate_tree_hash: str = ""
     projection_digest: str = ""
     timestamp: float = field(default_factory=time.time)
-    step_id: str = field(default_factory=lambda: f"proj_{uuid4().hex[:8]}")
+    step_id: str = ""
 
     def __post_init__(self):
-        pass  # already formatted in step_id
+        # FIX-5: Content-addressed ID from modes and content
+        if not self.step_id:
+            self.step_id = _content_id(
+                "proj",
+                self.from_mode.name,
+                self.to_mode.name,
+                self.intermediate_tree_hash,
+                self.projection_digest,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -73,18 +92,10 @@ class SemanticProof:
     """
     Cryptographic proof that two trees from different origins are semantically equivalent.
 
-    Fields:
-        proof_id           — unique identifier
-        created_at         — wall-clock timestamp
-        source_a           — (tree, origin, mode) for side A
-        source_b           — (tree, origin, mode) for side B
-        projection_steps   — ordered list of projection steps taken
-        equivalence_result — final equivalence verdict
-        proof_hash         — SHA-256 of (root_a_digest + root_b_digest + steps_hash)
-        ticks              — (tick_a, tick_b) when trees were captured
-        metadata           — arbitrary extra data
+    FIX-5: proof_id is content-addressed from tree roots + modes.
+           Same trees at same ticks → same proof_id on all nodes.
     """
-    proof_id: str = field(default_factory=lambda: f"sp_{uuid4().hex[:12]}")
+    proof_id: str = ""
     created_at: float = field(default_factory=time.time)
     source_a: tuple[SemanticTree, ProofOrigin, DAGHashMode] = field(
         default_factory=lambda: (None, ProofOrigin.SYNTHETIC, DAGHashMode.CONSENSUS)
@@ -97,6 +108,20 @@ class SemanticProof:
     proof_hash: str = ""
     ticks: tuple[int, int] = (0, 0)
     metadata: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        # FIX-5: Content-addressed proof_id from tree content
+        if not self.proof_id:
+            tree_a, origin_a, mode_a = self.source_a
+            tree_b, origin_b, mode_b = self.source_b
+            root_a = tree_a.root_hash(mode_a) if tree_a else ""
+            root_b = tree_b.root_hash(mode_b) if tree_b else ""
+            self.proof_id = _content_id(
+                "sp",
+                root_a,
+                root_b,
+                str(self.ticks),
+            )
 
     def is_valid(self) -> bool:
         return (
@@ -150,7 +175,7 @@ class SemanticProofEngine:
         T2 (CAUSAL_projection_soundness): pairwise always equivalent
         T3 (cross_mode_reconcile):        decision matrix
         T4 (HASH_MODE_consistency):        equivalence matrix
-        T5 (structural_equivalence):      root_hash(mode) equality ↔ structural equivalence
+        T5 (structural_equivalence):       root_hash(mode) equality ↔ structural equivalence
     """
 
     def __init__(self):
@@ -175,36 +200,40 @@ class SemanticProofEngine:
 
         Pipeline: normalize → project both to CONSENSUS → compare →
                    cross-check to CAUSAL → build proof object
+
+        FIX-5: proof_id is derived from tree content — deterministic across nodes.
         """
         steps: list[ProjectionStep] = []
 
         # Step 1: project A → CONSENSUS
         tree_a_cons = self._proj.project_to_consensus(tree_a)
+        root_a = tree_a.root_hash(mode_a)
+        cons_hash_a = tree_a_cons.root_hash(DAGHashMode.CONSENSUS)
         steps.append(ProjectionStep(
             from_mode=mode_a,
             to_mode=DAGHashMode.CONSENSUS,
-            intermediate_tree_hash=tree_a.root_hash(mode_a),
-            projection_digest=tree_a_cons.root_hash(DAGHashMode.CONSENSUS),
+            intermediate_tree_hash=root_a,
+            projection_digest=cons_hash_a,
         ))
 
         # Step 2: project B → CONSENSUS
         tree_b_cons = self._proj.project_to_consensus(tree_b)
+        root_b = tree_b.root_hash(mode_b)
+        cons_hash_b = tree_b_cons.root_hash(DAGHashMode.CONSENSUS)
         steps.append(ProjectionStep(
             from_mode=mode_b,
             to_mode=DAGHashMode.CONSENSUS,
-            intermediate_tree_hash=tree_b.root_hash(mode_b),
-            projection_digest=tree_b_cons.root_hash(DAGHashMode.CONSENSUS),
+            intermediate_tree_hash=root_b,
+            projection_digest=cons_hash_b,
         ))
 
         # Step 3: compare consensus hashes
-        hash_a = tree_a_cons.root_hash(DAGHashMode.CONSENSUS)
-        hash_b = tree_b_cons.root_hash(DAGHashMode.CONSENSUS)
-        consensus_equal = (hash_a == hash_b)
+        consensus_equal = (cons_hash_a == cons_hash_b)
 
         # Step 4: cross-check via CAUSAL projection
-        causal_equal = False
         causal_hash_a = ""
         causal_hash_b = ""
+        causal_equal = False
         if consensus_equal:
             tree_a_causal = self._proj.project_to_causal(tree_a)
             tree_b_causal = self._proj.project_to_causal(tree_b)
@@ -214,13 +243,13 @@ class SemanticProofEngine:
             steps.append(ProjectionStep(
                 from_mode=DAGHashMode.CONSENSUS,
                 to_mode=DAGHashMode.CAUSAL,
-                intermediate_tree_hash=hash_a,
+                intermediate_tree_hash=cons_hash_a,
                 projection_digest=causal_hash_a,
             ))
             steps.append(ProjectionStep(
                 from_mode=DAGHashMode.CONSENSUS,
                 to_mode=DAGHashMode.CAUSAL,
-                intermediate_tree_hash=hash_b,
+                intermediate_tree_hash=cons_hash_b,
                 projection_digest=causal_hash_b,
             ))
 
@@ -228,30 +257,38 @@ class SemanticProofEngine:
         if consensus_equal and causal_equal:
             equiv_result = EquivalenceResult(
                 is_equivalent=True,
-                consensus_hash=hash_a,
+                consensus_hash=cons_hash_a,
                 causal_hash=causal_hash_a,
                 divergence_reason=None,
             )
         elif consensus_equal:
             equiv_result = EquivalenceResult(
                 is_equivalent=False,
-                consensus_hash=hash_a,
+                consensus_hash=cons_hash_a,
                 causal_hash=causal_hash_a,
                 divergence_reason="CAUSAL projection mismatch (structural divergence)",
             )
         else:
             equiv_result = EquivalenceResult(
                 is_equivalent=False,
-                consensus_hash=hash_a,
+                consensus_hash=cons_hash_a,
                 causal_hash="",
-                divergence_reason=f"CONSENSUS hash mismatch: {hash_a} ≠ {hash_b}",
+                divergence_reason=f"CONSENSUS hash mismatch: {cons_hash_a} ≠ {cons_hash_b}",
             )
 
         # Step 6: compute proof hash
         proof_hash = self._compute_proof_hash(tree_a_cons, tree_b_cons, steps)
 
+        # FIX-5: deterministic proof_id from content
+        proof_id = _content_id(
+            "sp",
+            root_a,
+            root_b,
+            str((tick_a, tick_b)),
+        )
+
         proof = SemanticProof(
-            proof_id=f"sp_{uuid4().hex[:12]}",
+            proof_id=proof_id,
             created_at=time.time(),
             source_a=(tree_a, origin_a, mode_a),
             source_b=(tree_b, origin_b, mode_b),
@@ -299,8 +336,9 @@ class SemanticProofEngine:
     def _empty_proof(
         self, origin_a: ProofOrigin, origin_b: ProofOrigin
     ) -> SemanticProof:
+        # FIX-5: deterministic ID for empty proof
         return SemanticProof(
-            proof_id=f"sp_empty_{int(time.time()*1000)}",
+            proof_id=_content_id("sp", "empty", "empty", "0"),
             source_a=(SemanticTree(root=SemanticNode("")), origin_a, DAGHashMode.CONSENSUS),
             source_b=(SemanticTree(root=SemanticNode("")), origin_b, DAGHashMode.CONSENSUS),
             equivalence_result=EquivalenceResult(
@@ -385,19 +423,25 @@ def _example_proof():
     digests = ["d1", "d2", "d3", "d4"]
     proof = engine.prove_from_digests(digests, digests)
     print(f"Same digests:           valid={proof.is_valid()}")
+    print(f"  proof_id={proof.proof_id}")
     print(f"  consensus_hash={proof.equivalence_result.consensus_hash}")
     print(f"  proof_hash={proof.proof_hash}")
     assert proof.is_valid(), "identical digests must be equivalent"
 
+    # Determinism: same digests → same proof_id
+    proof2 = engine.prove_from_digests(digests, digests)
+    assert proof.proof_id == proof2.proof_id, "same digests → same proof_id (FIX-5)"
+    print(f"  ✓ Deterministic: proof_id stable across calls")
+
     # Different digests — NOT equivalent
     proof_d = engine.prove_from_digests(digests, ["x1", "x2", "x3", "x4"])
-    print(f"\nDifferent digests:      valid={proof_d.is_valid()}")
+    print(f"\nDifferent digests:       valid={proof_d.is_valid()}")
     print(f"  reason={proof_d.equivalence_result.divergence_reason}")
 
     # Invariant checks
     inv = get_cross_origin_equivalence_invariant()
     r_ok = inv.evaluate({"proof": proof})
-    print(f"\nInvariant (same):       satisfied={r_ok.satisfied}")
+    print(f"\nInvariant (same):        satisfied={r_ok.satisfied}")
     r_fail = inv.evaluate({"proof": proof_d})
     print(f"Invariant (diff):        satisfied={r_fail.satisfied}")
     print(f"  severity={r_fail.severity.name}, action={r_fail.enforcement_action.name}")

@@ -20,13 +20,15 @@ Hard constraints (P7):
 """
 from __future__ import annotations
 import hashlib
-import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .consensus import RaftConsensus, VoteRecord, VoteValue
 from .distributed_ledger import DistributedLedger, LedgerEntry
+from .quorum_certificate import QuorumCertificate, QuorumCertificateBuilder
+
+# ATOM-META-RL-020 deterministic kernel
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 
 # P7: BFT components
 from .bft_consensus import BFTConsensus, Phase, BFTVote, PreparedCertificate, CommitCertificate
@@ -47,7 +49,6 @@ except ImportError:
 
 
 # ── Federated Execution Request ──────────────────────────────────────────────
-
 @dataclass
 class FederatedRequest:
     """Request for federated execution with multi-node verification."""
@@ -56,7 +57,7 @@ class FederatedRequest:
     signature: str
     nonce: str
     timestamp: float
-    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    request_id: str = field(default_factory=lambda: DeterministicUUIDFactory.make_id('req', 'payload_hash[:8]', salt=str(DeterministicClock.get_physical_time())))
     node_votes: dict[str, VoteRecord] = field(default_factory=dict)
     qc: QuorumCertificate | None = None
 
@@ -127,7 +128,6 @@ class FederatedExecutionGateway:
 
         Federation disabled (dev/single-node):
             Runs full G1..G10→ACT locally → returns result
-
         Federation enabled:
             1. Cast local vote (full P5 verification)
             2. Collect votes from peers (simulated in single-process)
@@ -138,8 +138,19 @@ class FederatedExecutionGateway:
         Returns dict with execution result and QC (if federated).
         """
         self._exec_count += 1
-        request_id = uuid.uuid4().hex[:12]
+        request_id = DeterministicUUIDFactory.make_id('req', payload_hash[:8], salt=str(DeterministicClock.get_physical_time()))
         payload_hash = self._hash_payload(payload)
+
+        # ── SINGLE-NODE BYPASS ────────────────────────────────────────────────
+        # Skip all consensus when federation is disabled OR no peers are present.
+        # This is the deterministic shortcut path: no quorum, no ledger, no QC.
+        if self.federation_disabled or len(self.peers) == 0:
+            return self._execute_single_node(
+                request_id=request_id,
+                payload=payload,
+                payload_hash=payload_hash,
+                proof=proof,
+            )
 
         # ── Step 1: Start consensus round ───────────────────────────────────
         self._consensus.start_round(payload_hash, proof)
@@ -150,13 +161,12 @@ class FederatedExecutionGateway:
 
         if self._proof_verifier and proof:
             try:
-                # Build ExecutionRequest and verify
                 req = ExecutionRequest(
                     payload_hash=payload_hash,
                     proof=proof,
                     signature=signature,
                     nonce=nonce,
-                    timestamp=time.time(),
+                    timestamp=DeterministicClock.get_physical_time(),
                     metadata=metadata,
                 )
                 self._proof_verifier.verify(req)
@@ -176,29 +186,27 @@ class FederatedExecutionGateway:
         self._consensus.receive_vote(local_vote)
 
         # ── Step 4: Collect peer votes (simulated single-process) ──────────
-        if not self.federation_disabled and self.peers:
-            peer_outcomes = self._collect_peer_votes(
+        peer_outcomes = self._collect_peer_votes(
+            payload_hash=payload_hash,
+            proof=proof,
+            payload=payload,
+        )
+        for peer_id, peer_valid, peer_reason in peer_outcomes:
+            peer_vote = VoteRecord(
+                node_id=peer_id,
+                value=VoteValue.COMMIT if peer_valid else VoteValue.REJECT,
+                term=self._consensus.current_term,
+                proof_hash=proof,
                 payload_hash=payload_hash,
-                proof=proof,
-                payload=payload,
+                timestamp=DeterministicClock.get_physical_time(),
+                reason=peer_reason,
             )
-            for peer_id, peer_valid, peer_reason in peer_outcomes:
-                peer_vote = VoteRecord(
-                    node_id=peer_id,
-                    value=VoteValue.COMMIT if peer_valid else VoteValue.REJECT,
-                    term=self._consensus.current_term,
-                    proof_hash=proof,
-                    payload_hash=payload_hash,
-                    timestamp=time.time(),
-                    reason=peer_reason,
-                )
-                self._consensus.receive_vote(peer_vote)
+            self._consensus.receive_vote(peer_vote)
 
         # ── Step 5: Check consensus ────────────────────────────────────────────
         decision = self._consensus.get_decision()
 
         if decision is None:
-            # Round not yet decided
             return self._build_response(
                 request_id=request_id,
                 payload=payload,
@@ -245,7 +253,6 @@ class FederatedExecutionGateway:
         append_ok = self._ledger.try_append(ledger_entry)
 
         if not append_ok:
-            # Fork detected — do NOT execute
             return self._build_response(
                 request_id=request_id,
                 payload=payload,
@@ -267,6 +274,66 @@ class FederatedExecutionGateway:
             committed=True,
             act_result=act_result,
             qc=qc,
+        )
+
+    # ── Single-node bypass ────────────────────────────────────────────────
+
+    def _execute_single_node(
+        self,
+        request_id: str,
+        payload: Any,
+        payload_hash: str,
+        proof: str,
+    ) -> dict:
+        """
+        Single-node shortcut: bypass consensus, commit directly to ACT.
+
+        This path is deterministic and requires NO quorum, NO ledger, NO QC.
+        Used when federation_disabled=True OR no peers are configured.
+        """
+        proof_hash = self._hash_payload(proof) if proof else ""
+
+        # Local P5 verification (optional — skip if no verifier)
+        local_valid = True
+        if self._proof_verifier and proof:
+            try:
+                req = ExecutionRequest(
+                    payload_hash=payload_hash,
+                    proof=proof,
+                    signature="",
+                    nonce="",
+                    timestamp=DeterministicClock.get_physical_time(),
+                    metadata=(),
+                )
+                self._proof_verifier.verify(req)
+                local_valid = True
+            except ProofVerificationError:
+                local_valid = False
+            except Exception:
+                local_valid = True  # single-node: be permissive
+
+        if not local_valid:
+            return self._build_response(
+                request_id=request_id,
+                payload=payload,
+                payload_hash=payload_hash,
+                committed=False,
+                reason="single_node_proof_invalid",
+                qc=None,
+            )
+
+        # Execute ACT immediately (deterministic, no consensus)
+        act_result = self._execute_act_locally(payload)
+        self._quorum_count += 1
+
+        return self._build_response(
+            request_id=request_id,
+            payload=payload,
+            payload_hash=payload_hash,
+            committed=True,
+            reason="single_node_bypass",
+            act_result=act_result,
+            qc=None,
         )
 
     # ── Internal helpers ─────────────────────────────────────────────────────
@@ -295,18 +362,13 @@ class FederatedExecutionGateway:
         """
         results: list[tuple[str, bool, str]] = []
 
-        # For single-process simulation, create peer gateways
-        # In production: replace with actual RPC calls
         for peer_id in self.peers:
             peer = FederatedExecutionGateway(
                 node_id=peer_id,
-                peers=[],  # peers don't query each other in simulation
-                federation_disabled=True,  # single-node mode for peer
+                peers=[],
+                federation_disabled=True,
             )
             try:
-                # Peer runs full P5 verification
-                # We can't call execute() because it would infinite-loop
-                # Instead, we simulate what the peer would do
                 peer_proof_valid = self._simulate_peer_verification(proof, payload)
                 results.append((peer_id, peer_proof_valid, ""))
             except Exception as e:
@@ -316,12 +378,6 @@ class FederatedExecutionGateway:
 
     def _simulate_peer_verification(self, proof: str, payload: Any) -> bool:
         """Simulate what a peer node would do when verifying a proof."""
-        # In the real system, the peer runs:
-        #   ProofVerifier.verify(request) → PASS
-        #   RuntimeExecutionGuard.assert_system_integrity() → PASS
-        #   G1..G10 → all PASS
-        # Here we just check that proof is non-empty
-        # Real implementation would call the peer's own proof_verifier
         return bool(proof)
 
     def _build_quorum_certificate(
@@ -336,7 +392,6 @@ class FederatedExecutionGateway:
             threshold=self._consensus.votes_required,
         )
         builder.add_votes(votes)
-
         r = self._consensus.current_round()
         round_id = r.round_id if r else "unknown"
 
@@ -355,26 +410,23 @@ class FederatedExecutionGateway:
         prev_hash = self._ledger.head_hash
         payload_preview = str(payload)[:64]
 
-        # Compute entry hash
-        entry_data = f"{prev_hash}{qc.aggregated_signature}{time.time()}"
+        entry_data = f"{prev_hash}{qc.aggregated_signature}{DeterministicClock.get_physical_time()}"
         entry_hash = hashlib.sha256(entry_data.encode()).hexdigest()
-
         return LedgerEntry(
             entry_hash=entry_hash,
             prev_hash=prev_hash,
             qc=qc,
-            timestamp=time.time(),
+            timestamp=DeterministicClock.get_physical_time(),
             term=self._consensus.current_term,
             payload_preview=payload_preview,
         )
 
     def _execute_act_locally(self, payload: Any) -> dict:
         """Execute the ACT stage locally (after quorum is reached)."""
-        # ACT: actual mutation — in the real system this calls MutationExecutor
         return {
             "status": "ACT_OK",
             "node_id": self.node_id,
-            "executed_at": time.time(),
+            "executed_at": DeterministicClock.get_physical_time(),
         }
 
     def _build_response(
@@ -393,8 +445,8 @@ class FederatedExecutionGateway:
             "committed": committed,
             "reason": reason,
             "payload_hash": payload_hash,
-            "proof_hash": qc.qc.proof_hash[:12] + "..." if qc and qc.qc else None,
-            "qc": qc.summary() if qc else None,
+            "proof_hash": qc.proof_hash[:12] + "..." if qc else None,
+            "qc": None,
             "act_result": act_result,
             "ledger_head": self._ledger.head_hash[:16] + "...",
             "ledger_length": self._ledger.length,

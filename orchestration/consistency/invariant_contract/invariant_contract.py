@@ -98,11 +98,18 @@ class InvariantDefinition:
     tags: list[str] = field(default_factory=list)
 
     # metadata
-    id: str = field(default_factory=lambda: str(uuid4())[:8])
+    id: str = ""  # FIX-6: deterministic, set in __post_init__
     version: str = "1.0"
     created_at: float = field(default_factory=time.time)
     last_triggered_at: float | None = None
     trigger_count: int = 0
+
+    def __post_init__(self):
+        # FIX-6: Deterministic ID — same name+version → same ID
+        if not self.id:
+            import hashlib
+            raw = f"{self.name}|{self.version}".encode()
+            self.id = hashlib.sha256(raw).hexdigest()[:8]
 
     def evaluate(self, state: dict[str, Any]) -> InvariantResult:
         """

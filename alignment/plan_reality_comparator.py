@@ -14,11 +14,10 @@ Invariant:
 from __future__ import annotations
 
 import hashlib
-import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Optional, Any
 
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 from alignment.drift_detector import (
     ExecutionTrace,
     PlannedDAG,
@@ -160,7 +159,7 @@ class PlanRealityComparator:
         Full binding: plan ↔ execution trace.
         Returns immutable PlanRealityBinding.
         """
-        binding_id = uuid.uuid4().hex
+        binding_id = DeterministicUUIDFactory.make_id('binding', planned.plan_id, salt='')
 
         # Step 1: Build execution lookup by node_id and output_hash
         exec_by_id: dict[str, Any] = {}
@@ -253,7 +252,7 @@ class PlanRealityComparator:
             plan_id=planned.plan_id,
             trace_id=trace.trace_id,
             dag_hash=trace.dag_hash,
-            created_at_ns=time.time_ns(),
+            created_at_ns=DeterministicClock.get_tick_ns(),
             node_mappings=node_mappings,
             causal_bindings=causal_bindings,
             planned_node_count=len(planned.nodes),

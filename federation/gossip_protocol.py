@@ -8,13 +8,12 @@ ConsensusResolver.
 from __future__ import annotations
 
 import asyncio
-import random
-import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable
 
 from federation.state_vector import StateVector
+from core.deterministic import DeterministicClock
 
 
 @dataclass
@@ -77,10 +76,10 @@ class GossipProtocol:
         if not available:
             return []
         k = min(self.config.fanout, len(available))
-        selected = random.sample(available, k)
+        selected = sorted(available)[:k]
         results = []
         for pid in selected:
-            self._peers[pid].last_push_ns = time.time_ns()
+            self._peers[pid].last_push_ns = DeterministicClock.get_tick_ns()
             # Simulate network delivery — peer updates their state
             # caller is responsible for invoking receive_push
             results.append((pid, self._peers[pid].vector))
@@ -94,7 +93,7 @@ class GossipProtocol:
         if peer is None:
             return None
 
-        now_ns = time.time_ns()
+        now_ns = DeterministicClock.get_tick_ns()
         peer.last_push_ns = now_ns
 
         # History tracking — always append for audit trail
@@ -117,7 +116,7 @@ class GossipProtocol:
         peer = self._peers.get(peer_id)
         if peer is None:
             return None
-        peer.last_pull_ns = time.time_ns()
+        peer.last_pull_ns = DeterministicClock.get_tick_ns()
         return peer.vector
 
     def receive_pull_response(
@@ -128,7 +127,7 @@ class GossipProtocol:
         if peer is None:
             return None
 
-        peer.last_pull_ns = time.time_ns()
+        peer.last_pull_ns = DeterministicClock.get_tick_ns()
         peer.vector_history.append(remote_vector)
         old = peer.vector
         peer.vector = remote_vector
@@ -174,7 +173,7 @@ class GossipProtocol:
 
     def get_fresh_vectors(self, max_age_ms: int | None = None) -> list[StateVector]:
         max_age_ms = max_age_ms or self.config.stale_threshold_ms
-        cutoff_ns = time.time_ns() - (max_age_ms * 1_000_000)
+        cutoff_ns = DeterministicClock.get_tick_ns() - (max_age_ms * 1_000_000)
         return [
             p.vector
             for p in self._peers.values()

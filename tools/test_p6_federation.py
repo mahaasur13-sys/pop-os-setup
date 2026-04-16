@@ -2,7 +2,8 @@
 """test_p6_federation.py — atom-federation-os v9.0+P6 Federated Execution Tests."""
 
 import sys, pathlib, hashlib, time
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
+# Fixed: use correct repo root (2 levels up from tools/, not 3)
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from core.federation.federated_gateway import FederatedExecutionGateway
 from core.federation.consensus import VoteValue, VoteRecord
@@ -33,7 +34,6 @@ def test_node_independent_verification():
     """✅ Each node verifies proof independently"""
     print("\n[TEST 2] Node-independent verification")
 
-    # Node A with valid proof
     proof = "valid-proof-sig-abc123"
     payload = {"action": "deploy"}
 
@@ -46,7 +46,6 @@ def test_node_independent_verification():
     result_a = node_a.execute(payload=payload, proof=proof)
     print(f"  Node A: committed={result_a['committed']}")
 
-    # Node B (different node) also processes same request independently
     node_b = FederatedExecutionGateway(
         node_id="node-b",
         peers=["node-a", "node-c"],
@@ -56,7 +55,6 @@ def test_node_independent_verification():
     result_b = node_b.execute(payload=payload, proof=proof)
     print(f"  Node B: committed={result_b['committed']}")
 
-    # Both should agree (same proof → same validation result)
     assert result_a["committed"] == result_b["committed"], "Nodes disagree on valid proof"
     print("  ✅ Nodes agree on valid proof")
 
@@ -68,7 +66,6 @@ def test_distributed_ledger_consistency():
     ledger_a = DistributedLedger()
     ledger_b = DistributedLedger()
 
-    # Build a simulated ledger entry
     from core.federation.consensus import VoteRecord, VoteValue
     from core.federation.quorum_certificate import QuorumCertificate
 
@@ -95,6 +92,7 @@ def test_distributed_ledger_consistency():
     }
     qc = QuorumCertificate(**qc_data)
 
+    # Both ledgers must start with the same genesis entry (prev_hash="GENESIS")
     entry = LedgerEntry(
         entry_hash="entry-1-hash",
         prev_hash="GENESIS",
@@ -107,18 +105,27 @@ def test_distributed_ledger_consistency():
     ok_a = ledger_a.try_append(entry)
     assert ok_a, "Ledger A append should succeed"
 
-    # Ledger B should see same prev_hash
+    # ledger_b must also bootstrap with the same genesis entry first.
+    # In a real distributed system, all nodes agree on the genesis block
+    # via an out-of-band bootstrap protocol before joining the network.
+    ok_b = ledger_b.try_append(entry)
+    assert ok_b, "Ledger B genesis append should succeed"
+    assert ledger_a.head_hash == ledger_b.head_hash, "Ledgers must agree on genesis"
+
+    # Now both ledgers can independently append entry2 (same prev_hash = genesis)
     entry2 = LedgerEntry(
         entry_hash="entry-2-hash",
-        prev_hash=ledger_a.head_hash,
+        prev_hash=ledger_a.head_hash,  # both ledgers have same head after genesis
         qc=qc,
         timestamp=time.time(),
         term=2,
         payload_preview="test-payload-2",
     )
 
-    ok_b = ledger_b.try_append(entry2)
-    assert ok_b, "Ledger B append should succeed"
+    ok_a2 = ledger_a.try_append(entry2)
+    ok_b2 = ledger_b.try_append(entry2)
+    assert ok_a2, "Ledger A entry2 should succeed"
+    assert ok_b2, "Ledger B entry2 should succeed"
 
     assert ledger_a.head_hash == ledger_b.head_hash, "Ledger heads differ"
     print(f"  ✅ Ledger A: head={ledger_a.head_hash[:12]}...  Ledger B: head={ledger_b.head_hash[:12]}...")
@@ -131,7 +138,9 @@ def test_fork_detection():
 
     ledger = DistributedLedger()
 
-    # Build a valid genesis entry
+    from core.federation.consensus import VoteRecord, VoteValue
+    from core.federation.quorum_certificate import QuorumCertificate
+
     qc_data = {
         "vote_records": (
             VoteRecord(
@@ -162,10 +171,9 @@ def test_fork_detection():
     assert ok, "First append should succeed"
     print(f"  Ledger head after entry 1: {ledger.head_hash[:12]}...")
 
-    # Try to append entry with wrong prev_hash (simulates fork)
     bad_entry = LedgerEntry(
         entry_hash="bad-entry-hash",
-        prev_hash="WRONG_PREV_HASH",  # intentionally wrong
+        prev_hash="WRONG_PREV_HASH",
         qc=qc,
         timestamp=time.time(),
         term=2,
@@ -186,7 +194,7 @@ def test_consensus_quorum_reached():
     consensus = RaftConsensus(
         node_id="node-a",
         peers=["node-b", "node-c"],
-        quorum_fraction=0.67,  # 2/3 for 3 nodes
+        quorum_fraction=0.67,
     )
 
     payload_hash = "test-payload-hash"
@@ -194,7 +202,6 @@ def test_consensus_quorum_reached():
 
     consensus.start_round(payload_hash, proof_hash)
 
-    # Cast 2 COMMIT votes (threshold for 3 nodes @ 2/3 = 2)
     v1 = VoteRecord(
         node_id="node-a", value=VoteValue.COMMIT,
         term=1, proof_hash=proof_hash, payload_hash=payload_hash,
@@ -240,10 +247,6 @@ def test_full_federated_consensus():
     if result["qc"]:
         print(f"  qc.commits={result['qc']['commit_count']}/{result['qc']['threshold']}")
 
-    # In single-process simulation, peer verification is simulated
-    # (empty proof → peer verification fails in simulation)
-    # Real distributed system: peers would verify and return COMMIT
-    # For testing: use federation_disabled=True for positive path
     print("  ⚠️  Note: in simulation, proof must be verified by peer nodes")
     print("       Real RPC-based peers would complete the full quorum")
 
@@ -267,7 +270,6 @@ def test_federation_disabled_single_node():
     print(f"  reason={result['reason']}")
     print(f"  federation_enabled={result.get('federation_enabled', 'N/A')}")
 
-    # Single-node mode should pass regardless of peer status
     assert result["committed"] or "consensus_pending" in result["reason"], \
         f"Unexpected result: {result}"
     print("  ✅ Single-node mode works")

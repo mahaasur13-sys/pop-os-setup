@@ -1,4 +1,4 @@
-"""consensus.py — atom-federation-os v9.0+P6 Federated Consensus.
+"""consensus.py — atom-federation-os v9.0+P6 Federated Consensus (ATOM-META-RL-020)
 
 Implements Raft-like quorum consensus for the FederatedExecutionGateway.
 Each node runs FULL P5 pipeline independently; consensus requires quorum of VALID votes.
@@ -7,11 +7,11 @@ Zero-trust invariant: NO trust between nodes — every node verifies independent
 """
 from __future__ import annotations
 import hashlib
-import time
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
+
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 
 # ── Types ────────────────────────────────────────────────────────────────────
 
@@ -50,7 +50,7 @@ class ConsensusRound:
     payload_hash: str
     proof_hash: str
     votes: dict[str, VoteRecord] = field(default_factory=dict)
-    started_at: float = field(default_factory=time.time)
+    started_at: float = field(default_factory=DeterministicClock.get_physical_time)
     decided_at: float | None = None
     outcome: VoteValue | None = None
     quorum_size: int = 0
@@ -84,13 +84,13 @@ class ConsensusRound:
             # Check if quorum now reached
             if self.commit_count >= self.votes_required:
                 self.outcome = VoteValue.COMMIT
-                self.decided_at = time.time()
+                self.decided_at = DeterministicClock.get_physical_time()
         else:
             # Any reject votes? Check termination
             active = self.quorum_size - self.abstain_count
             if self.reject_count > (active - self.reject_count):
                 self.outcome = VoteValue.REJECT
-                self.decided_at = time.time()
+                self.decided_at = DeterministicClock.get_physical_time()
 
     @property
     def abstain_count(self) -> int:
@@ -140,7 +140,7 @@ class RaftConsensus:
             self._current_term += 1
 
         self._current_round = ConsensusRound(
-            round_id=f"round-{self._current_term}-{uuid.uuid4().hex[:8]}",
+            round_id=DeterministicUUIDFactory.make_round_id(self._current_term, 0),
             term=self._current_term,
             payload_hash=payload_hash,
             proof_hash=proof_hash,
@@ -181,7 +181,7 @@ class RaftConsensus:
             term=self._current_term,
             proof_hash=proof_hash,
             payload_hash=payload_hash,
-            timestamp=time.time(),
+            timestamp=DeterministicClock.get_physical_time(),
             reason=reason,
         )
 
@@ -313,7 +313,7 @@ class RaftConsensus:
                 term=self._current_term,
                 proof_hash=proof_hash,
                 payload_hash=payload_hash,
-                timestamp=time.time(),
+                timestamp=DeterministicClock.get_physical_time(),
                 reason="" if proof_valid else "peer_validation_failed",
             )
             self.receive_vote(vote)

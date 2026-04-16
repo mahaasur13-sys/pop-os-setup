@@ -14,12 +14,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import time
-import uuid
 from dataclasses import dataclass, field
 from core.proof.execution_request import ExecutionRequest
 from pathlib import Path
 from typing import Any
+
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 
 # ─── Exceptions ────────────────────────────────────────────────────────────────
 
@@ -143,7 +143,7 @@ class ProofVerifier:
         ledger_hash = self._verify_ledger_chain(request, prev_hash)
 
         # Mark nonce as used
-        self._used_nonces[request.nonce] = time.time()
+        self._used_nonces[request.nonce] = DeterministicClock.get_physical_time()
         self._prune_nonce_cache()
         self._last_hash = ledger_hash
 
@@ -205,7 +205,7 @@ class ProofVerifier:
 
     def _verify_timestamp(self, request: Any) -> None:
         """Stage 4: Reject if request is too old."""
-        age = time.time() - request.timestamp
+        age = DeterministicClock.get_physical_time() - request.timestamp
         if age > self.MAX_AGE_SECONDS:
             raise StaleRequestError(age)
 
@@ -218,8 +218,8 @@ class ProofVerifier:
 
     def sign(self, payload: Any, issuer_id: str = "test") -> ExecutionRequest:
         """Create and sign an ExecutionRequest with a valid HMAC proof."""
-        nonce = uuid.uuid4().hex
-        ts = time.time()
+        nonce = DeterministicUUIDFactory.make_nonce(issuer_id, 0, seq=0)
+        ts = DeterministicClock.get_physical_time()
         req = ExecutionRequest(
             payload=payload, proof=b"", signature=b"", issuer_id=issuer_id,
             nonce=nonce, timestamp=ts, metadata=()

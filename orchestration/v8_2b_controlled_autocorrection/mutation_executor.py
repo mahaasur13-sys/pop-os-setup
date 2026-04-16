@@ -107,6 +107,7 @@ class MutationExecutor:
         self._config = config or ExecutorConfig()
         self._update_fn = update_fn or self._default_update_fn
         self._exec_counter = 0
+        self._tick: int = 0  # deterministic tick counter
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -119,6 +120,7 @@ class MutationExecutor:
         oscillation_detected: bool,
         recent_outcome: Optional[str] = None,
         pre_check_passed: bool = False,
+        tick: int = 0,
     ) -> ExecutionResult:
         """
         Gateway-facing mutation API — called by ExecutionGateway ACT stage.
@@ -136,6 +138,7 @@ class MutationExecutor:
         from core.runtime.runtime_guard import RuntimeExecutionGuard
         RuntimeExecutionGuard.assert_in_gateway_context()
 
+        self._tick = tick
         return self._execute_internal(
             drift_score=drift_score,
             health_score=health_score,
@@ -156,7 +159,7 @@ class MutationExecutor:
     def _generate_delta(
         self, mutation_class: MutationClass, policy: MutationPolicy, theta: np.ndarray
     ) -> np.ndarray:
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(seed=self._tick)
 
         if mutation_class == MutationClass.RETUNE:
             max_eps = (

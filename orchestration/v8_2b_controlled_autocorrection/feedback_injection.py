@@ -77,7 +77,7 @@ class ControlSurfaceModifier:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    def ingest(self, signal: FeedbackSignal) -> None:
+    def ingest(self, signal: FeedbackSignal, tick: int = 0) -> None:
         """Record a feedback signal and update internal distribution."""
         self._signals.append(signal)
         if len(self._signals) > self.window_size:
@@ -179,7 +179,7 @@ class FeedbackInjectionLoop:
         self._modifier.ingest(signal)
 
     def compute_biased_delta(
-        self, base_delta: np.ndarray, mutation_class
+        self, base_delta: np.ndarray, mutation_class, tick: int = 0
     ) -> np.ndarray:
         """
         Takes a base delta (from MutationExecutor._generate_delta)
@@ -198,7 +198,8 @@ class FeedbackInjectionLoop:
 
         # Exploration bonus adds small noise in orthogonal directions
         if expl > 0:
-            rng = np.random.default_rng()
+            # FIX-3: Deterministic noise — same tick → same noise vector
+            rng = np.random.default_rng(seed=tick)
             noise = rng.standard_normal(biased.shape) * expl * np.std(base_delta)
             biased += noise
 

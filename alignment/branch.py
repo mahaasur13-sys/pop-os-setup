@@ -16,11 +16,11 @@ Invariant (preserved from v10.0):
 
 from __future__ import annotations
 
-import uuid
-import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
+
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 
 
 class BranchStatus(Enum):
@@ -103,13 +103,12 @@ class BranchStore:
         parent_branch_id: str | None = None,
         tags: list[str] | None = None,
     ) -> Branch:
-        import threading
         branch = Branch(
-            branch_id=uuid.uuid4().hex,
+            branch_id=DeterministicUUIDFactory.make_id('branch', plan_id, salt=''),
             plan_id=plan_id,
             root_checkpoint_id=root_checkpoint_id,
             parent_branch_id=parent_branch_id,
-            created_at_ns=time.time_ns(),
+            created_at_ns=DeterministicClock.get_tick_ns(),
             tags=tuple(tags or []),
         )
         with self._lock:
@@ -125,7 +124,6 @@ class BranchStore:
             return [self._by_id[bid] for bid in self._by_plan.get(plan_id, []) if bid in self._by_id]
 
     def update_status(self, branch_id: str, status: BranchStatus) -> Branch:
-        import threading
         with self._lock:
             b = self._by_id[branch_id]
             updated = Branch(
@@ -138,14 +136,13 @@ class BranchStore:
                 event_count=b.event_count,
                 node_count=b.node_count,
                 last_event_id=b.last_event_id,
-                last_updated_ns=time.time_ns(),
+                last_updated_ns=DeterministicClock.get_tick_ns(),
                 tags=b.tags,
             )
             self._by_id[branch_id] = updated
             return updated
 
     def append_event(self, branch_id: str, event_id: str) -> None:
-        import threading
         with self._lock:
             b = self._by_id[branch_id]
             updated = Branch(
@@ -158,7 +155,7 @@ class BranchStore:
                 event_count=b.event_count + 1,
                 node_count=b.node_count,
                 last_event_id=event_id,
-                last_updated_ns=time.time_ns(),
+                last_updated_ns=DeterministicClock.get_tick_ns(),
                 tags=b.tags,
             )
             self._by_id[branch_id] = updated

@@ -43,8 +43,6 @@ from observability.core.event_schema import (
     validate_payload,
 )
 from observability.core.atom_metrics import InMemoryPrometheusEmitter
-from failure_replay.event_store import EventStore
-from failure_replay.replay_engine import ReplayEngine
 
 
 class ObservabilityEmitter:
@@ -69,6 +67,8 @@ class ObservabilityEmitter:
         self.node_id = node_id
 
         # ── Replay layer ────────────────────────────────────────────────
+        from failure_replay.event_store import EventStore
+        from failure_replay.replay_engine import ReplayEngine
         self._event_store = EventStore(db_path=event_store_path, node_id=node_id)
         self.replay_engine = ReplayEngine(event_store=self._event_store)
 

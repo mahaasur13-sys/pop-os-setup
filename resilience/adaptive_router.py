@@ -226,14 +226,14 @@ class AdaptiveRouter:
 
     # ── Routing decision ──────────────────────────────────────────────────
 
-    def route(self, command: Optional[str] = None) -> RouteMetrics:
+    def route(self, command: Optional[str] = None, tick: int = 0) -> RouteMetrics:
         """
         Choose the best peer for routing.
 
         Strategy:
           1. Filter to in-rotation peers
           2. Filter out SLO-violating peers
-          3. If any remain: weighted-random among them
+          3. If any remain: deterministic index from tick among healthy peers
           4. If none: probe mode — use least-bad peer (SLO violators allowed)
           5. If no peers at all: return None
         """
@@ -251,23 +251,17 @@ class AdaptiveRouter:
             self._skipped_count += len(skipped)
 
             if healthy:
-                # Weighted random among healthy peers
-                weights = {p: self._state[p].weight for p in healthy}
-                total = sum(weights.values())
-                if total > 0:
-                    chosen = random.choices(
-                        list(weights.keys()),
-                        weights=list(weights.values()),
-                        k=1,
-                    )[0]
-                else:
-                    chosen = random.choice(healthy)
+                # FIX-4: Deterministic peer selection — same tick → same peer
+                # Sort for deterministic order, then pick by tick index
+                healthy_sorted = sorted(healthy)
+                idx = tick % len(healthy_sorted)
+                chosen = healthy_sorted[idx]
                 return RouteMetrics(
                     chosen_peer=chosen,
                     all_peers=list(self._state.keys()),
-                    weights={p: round(w, 4) for p, w in weights.items()},
+                    weights={},
                     skipped=skipped,
-                    reason="weighted_random_healthy",
+                    reason="deterministic_tick_index",
                 )
             elif self._state:
                 # Probe mode: least-bad peer (lowest combined penalty)

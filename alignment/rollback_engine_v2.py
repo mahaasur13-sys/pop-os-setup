@@ -15,13 +15,11 @@ Rollback types:
 
 from __future__ import annotations
 
-import hashlib
-import time
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 from alignment.drift_detector import (
     CompositeDriftReport,
     DriftSeverity,
@@ -90,7 +88,7 @@ class RollbackDecider:
         binding: PlanRealityBinding,
         report: CompositeDriftReport,
     ) -> RollbackScope:
-        rollback_id = uuid.uuid4().hex
+        rollback_id = DeterministicUUIDFactory.make_id('rollback', binding.plan_id, salt='')
         severity = report.severity
 
         if severity == DriftSeverity.OK:
@@ -129,7 +127,7 @@ class RollbackDecider:
     ) -> RollbackScope:
         # Full: invalidate all nodes + new causal branch
         all_nodes = [m.planned.node_id for m in binding.node_mappings]
-        branch_id = uuid.uuid4().hex
+        branch_id = DeterministicUUIDFactory.make_id('rollback_branch', binding.plan_id, salt='')
         return RollbackScope(rollback_id=rollback_id, plan_id=binding.plan_id, trace_id=binding.trace_id,
                              rollback_type=RollbackType.FULL, invalidate_nodes=all_nodes,
                              rederive_edges=[], checkpoint_before=True,
@@ -182,8 +180,8 @@ class RollbackExecutor:
                 drift_score_after=None, is_stable=True,
                 messages=["No rollback — drift is OK"],
             )
-        branch_id = plan.rollback_scope.branch_id or uuid.uuid4().hex
-        new_trace_id = uuid.uuid4().hex[:12]
+        branch_id = plan.rollback_scope.branch_id or DeterministicUUIDFactory.make_id('rb_branch', binding.plan_id, salt='')
+        new_trace_id = DeterministicUUIDFactory.make_id('trace', binding.plan_id, salt='')[:12]
         result = RollbackResult(
             rollback_id=plan.rollback_scope.rollback_id,
             rollback_type=plan.rollback_scope.rollback_type,

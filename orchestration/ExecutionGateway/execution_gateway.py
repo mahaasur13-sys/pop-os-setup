@@ -8,7 +8,7 @@ Algebra bindings: AST_hash, graph_hash, env_hash, proof, runtime_guard
 Python: 3.12.1 | PYTHONHASHSEED=0 | deterministic bootstrap
 """
 from __future__ import annotations
-import hashlib, time, uuid, sys, pathlib
+import hashlib, time, sys, pathlib
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -126,6 +126,7 @@ def _act_stage(state: GatewayState) -> GateResult:
                 mutation_density=0.1,
                 coherence_drop=0.0,
                 oscillation_detected=False,
+                tick=state.tick,  # FIX-1: propagate tick for deterministic RNG
             )
             return GateResult(gate="ACT", status=GateStatus.PASS, data={"result": result})
         except Exception as exc:
@@ -190,6 +191,7 @@ class ExecutionGateway:
         self._proof_verifier = proof_verifier
         self._exec_count: int = 0
         self._blocked_count: int = 0
+        self._tick: int = 0  # deterministic tick counter
 
     def execute(self, input_data: Any, intent: str = "") -> GatewayResult:
         """
@@ -197,17 +199,20 @@ class ExecutionGateway:
         This is the SOLE entry point for all state mutations.
         """
         with GatewayContextGuard("execute"):
-            return self._execute_impl(input_data, intent)
+            self._tick += 1
+            return self._execute_impl(input_data, intent, tick=self._tick)
 
-    def _execute_impl(self, input_data: Any, intent: str = "") -> GatewayResult:
+    def _execute_impl(self, input_data: Any, intent: str = "", tick: int = 0) -> GatewayResult:
         _get_guard().assert_system_integrity()
         self._exec_count += 1
+        # FIX-1: Deterministic plan_id — same input + same tick → same plan_id
         plan_id = hashlib.sha256(
-            f"{str(input_data)}{time.time_ns()}{uuid.uuid4().hex}".encode()
+            f"{str(input_data)}{tick}".encode()
         ).hexdigest()[:16]
 
         state = GatewayState(input_data=input_data, intent=intent, plan_id=plan_id)
         state._internal["_mutation_executor"] = self._mutation_executor
+        state.tick = tick  # FIX-1: pass tick to ACT stage
         gate_results: list[GateResult] = []
 
         for gate_fn in self._gate_fns:
@@ -251,14 +256,13 @@ class ExecutionGateway:
         Verification chain:
             1. Signature verification (HMAC)
             2. Payload binding (proof bound to payload_hash)
-            3. Nonce uniqueness (replay protection) ← FIX: nonce cached HERE
+            3. Nonce uniqueness (replay protection) — FIX-1: nonce derived from tick
             4. Timestamp liveness (staleness check)
             5. Ledger continuity
         Only after ALL stages pass does execution proceed.
         """
         if not isinstance(request, ExecutionRequest):
             raise ProofVerificationError("INVALID_REQUEST", "request must be ExecutionRequest")
-        # CRITICAL FIX: verify proof BEFORE execution — this populates the nonce cache
         self._proof_verifier.verify(request)
         return self.execute(request.payload if hasattr(request, "payload") else request, intent=intent)
 
@@ -269,6 +273,10 @@ class ExecutionGateway:
             "total_blocked": self._blocked_count,
             "block_rate": self._blocked_count / max(self._exec_count, 1),
         }
+
+    @property
+    def tick(self) -> int:
+        return self._tick
 
 
 @dataclass

@@ -1,160 +1,163 @@
-"""ConsensusResolver — derives a consistent θ from a set of StateVectors.
+# ATOMFEDERATION-OS - ConsensusResolver
+# Federation layer — deterministic consensus with ExecutionGateway
+# =========================================================
 
-Rules (in priority order):
-  1. If ≥ 2/3 nodes agree on same theta_hash → accept consensus
-  2. If no quorum → pick node with max stability_score (or min drift on tie)
-  3. Stale vectors are excluded from quorum calculation
-  4. Malicious/bad vectors (score anomalies) → isolated via replay validation
-"""
-
-from __future__ import annotations
-
-import time
+from typing import Optional, Any, List, Dict
 from dataclasses import dataclass, field
-from typing import Literal
+from datetime import datetime
+import threading
+import hashlib
 
-from federation.state_vector import StateVector
+from orchestration.execution_gateway import ExecutionGateway, SafetyViolationError
+
+
+@dataclass
+class ConsensusVote:
+    node_id: str
+    tick: int
+    vote: str  # 'approve', 'reject', 'abstain'
+    weight: float
+    signature: Optional[str] = None
+
+
+@dataclass
+class ConsensusDecision:
+    tick: int
+    decision: str  # 'proceed', 'stall', 'rollback'
+    votes_approve: int
+    votes_reject: int
+    votes_abstain: int
+    quorum_reached: bool
+    timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass
 class ConsensusResult:
-    theta_hash: str
-    source: Literal["quorum", "highest_stability", "local_only", "no_peers"]
-    confidence: float  # 0.0–1.0
-    voters: list[str] = field(default_factory=list)
-    timestamp_ns: int = field(default_factory=time.time_ns)
-
-    @property
-    def is_quorum(self) -> bool:
-        return self.source == "quorum"
-
-
-@dataclass
-class QuorumConfig:
-    quorum_fraction: float = 2 / 3       # 2/3 required
-    stale_threshold_ms: int = 30_000
-    min_nodes: int = 1                   # minimum nodes to consider consensus
-    max_age_ms: int = 60_000             # max age for vectors to participate
+    success: bool
+    decision: Optional[ConsensusDecision] = None
+    error: Optional[str] = None
 
 
 class ConsensusResolver:
-    """Resolves distributed state to a single theta_hash."""
+    # =========================================================
+    # CONSENSUS RESOLVER — Deterministic Federation Consensus
+    # All consensus operations go through ExecutionGateway
+    # =========================================================
 
-    def __init__(self, node_id: str, config: QuorumConfig | None = None):
-        self.node_id = node_id
-        self.config = config or QuorumConfig()
+    def __init__(self, gateway: ExecutionGateway, quorum_threshold: float = 0.51):
+        self._gateway = gateway
+        self._quorum_threshold = quorum_threshold
+        self._votes: Dict[int, List[ConsensusVote]] = {}
+        self._decisions: Dict[int, ConsensusDecision] = {}
+        self._lock = threading.RLock()
+        self._node_weights: Dict[str, float] = {}
 
-    def resolve(
+    def register_node(self, node_id: str, weight: float = 1.0) -> None:
+        with self._gateway.mutation_context(can_mutate=True):
+            self._node_weights[node_id] = weight
+
+    @ExecutionGateway.requires_gateway
+    def submit_vote(
         self,
-        my_vector: StateVector,
-        peer_vectors: list[StateVector],
-        local_theta_hash: str,
+        node_id: str,
+        tick: int,
+        vote: str
     ) -> ConsensusResult:
-        """Main entry point. Returns consensus result for a single theta."""
-        all_vectors = [my_vector] + list(peer_vectors)
-        total_nodes = len(all_vectors)
-
-        # Filter out stale vectors
-        now_ns = time.time_ns()
-        fresh = [
-            v for v in all_vectors
-            if (now_ns - v.timestamp_ns) / 1_000_000 <= self.config.max_age_ms
-        ]
-
-        if not fresh:
-            # No fresh vectors — if we have no peers, admit defeat (local_only)
-            # If we have peers but they're all stale, use highest_stability as fallback
-            if not peer_vectors:
+        with self._lock:
+            if not self._gateway.is_safe():
                 return ConsensusResult(
-                    theta_hash=local_theta_hash,
-                    source="local_only",
-                    confidence=0.0,
-                    voters=[],
+                    success=False,
+                    error='Gateway safety check failed'
                 )
-            # Peers exist but all stale → use local vector as best effort
-            return ConsensusResult(
-                theta_hash=my_vector.theta_hash,
-                source="highest_stability",
-                confidence=my_vector.stability_score,
-                voters=[my_vector.node_id],
+
+            if tick not in self._votes:
+                self._votes[tick] = []
+
+            weight = self._node_weights.get(node_id, 1.0)
+            signature = self._compute_signature(node_id, tick, vote)
+
+            consensus_vote = ConsensusVote(
+                node_id=node_id,
+                tick=tick,
+                vote=vote,
+                weight=weight,
+                signature=signature
             )
 
-        # Count by theta_hash (only fresh vectors participate)
-        vote_counts: dict[str, list[str]] = {}
-        for v in fresh:
-            vote_counts.setdefault(v.theta_hash, []).append(v.node_id)
+            self._votes[tick].append(consensus_vote)
 
-        # Threshold: need at least 2 nodes and 2/3 of fresh nodes
-        threshold = max(2, self.config.quorum_fraction * total_nodes)
+            return self._resolve_consensus(tick)
 
-        # Rule 1: quorum
-        for theta_hash, voters in vote_counts.items():
-            if len(voters) >= threshold:
-                confidence = len(voters) / total_nodes
+    def _compute_signature(self, node_id: str, tick: int, vote: str) -> str:
+        data = f'{node_id}:{tick}:{vote}'.encode()
+        return hashlib.sha256(data).hexdigest()
+
+    def _resolve_consensus(self, tick: int) -> ConsensusResult:
+        if tick not in self._votes:
+            return ConsensusResult(success=False, error=f'No votes for tick {tick}')
+
+        votes = self._votes[tick]
+        approve_weight = sum(v.weight for v in votes if v.vote == 'approve')
+        reject_weight = sum(v.weight for v in votes if v.vote == 'reject')
+        total_weight = sum(v.weight for v in votes)
+        abstain_weight = sum(v.weight for v in votes if v.vote == 'abstain')
+
+        if total_weight == 0:
+            return ConsensusResult(success=False, error='No voting weight')
+
+        approve_ratio = approve_weight / total_weight
+        reject_ratio = reject_weight / total_weight
+
+        quorum_reached = (approve_ratio + reject_ratio) >= self._quorum_threshold
+
+        if approve_ratio > reject_ratio and approve_ratio > 0.5:
+            decision_str = 'proceed'
+        elif reject_ratio > approve_ratio and reject_ratio > 0.5:
+            decision_str = 'rollback'
+        else:
+            decision_str = 'stall'
+
+        decision = ConsensusDecision(
+            tick=tick,
+            decision=decision_str,
+            votes_approve=int(approve_weight),
+            votes_reject=int(reject_weight),
+            votes_abstain=int(abstain_weight),
+            quorum_reached=quorum_reached
+        )
+
+        self._decisions[tick] = decision
+        return ConsensusResult(success=True, decision=decision)
+
+    @ExecutionGateway.requires_gateway
+    def force_decision(self, tick: int, decision: str) -> ConsensusResult:
+        with self._lock:
+            if decision not in ('proceed', 'stall', 'rollback'):
                 return ConsensusResult(
-                    theta_hash=theta_hash,
-                    source="quorum",
-                    confidence=confidence,
-                    voters=voters,
+                    success=False,
+                    error=f'Invalid decision: {decision}'
                 )
 
-        # Rule 2: highest stability_score (stability-first policy)
-        best_vector = max(
-            fresh,
-            key=lambda v: (v.stability_score, -v.drift_score),
-        )
-        confidence = best_vector.stability_score / max(v.stability_score for v in fresh)
-        return ConsensusResult(
-            theta_hash=best_vector.theta_hash,
-            source="highest_stability",
-            confidence=confidence,
-            voters=[best_vector.node_id],
-        )
+            total_weight = sum(self._node_weights.values())
+            approve = total_weight if decision == 'proceed' else 0
+            reject = total_weight if decision == 'rollback' else 0
 
-    def resolve_many(
-        self,
-        my_vector: StateVector,
-        peer_vectors: list[StateVector],
-        local_thetas: dict[str, str],  # key → theta_hash
-    ) -> dict[str, ConsensusResult]:
-        """Resolve consensus for multiple theta keys."""
-        all_vectors = [my_vector] + list(peer_vectors)
+            consensus_decision = ConsensusDecision(
+                tick=tick,
+                decision=decision,
+                votes_approve=approve,
+                votes_reject=reject,
+                votes_abstain=0,
+                quorum_reached=True
+            )
 
-        # For each key, group vectors by the key's theta_hash
-        results = {}
-        for key in local_thetas:
-            local_hash = local_thetas[key]
-            # Find peer vectors that match this key
-            # (In practice, each node tracks which key a vector belongs to)
-            # Here we do per-key consensus based on all vectors
-            results[key] = self.resolve(my_vector, peer_vectors, local_hash)
+            self._decisions[tick] = consensus_decision
+            return ConsensusResult(success=True, decision=consensus_decision)
 
-        return results
+    def get_decision(self, tick: int) -> Optional[ConsensusDecision]:
+        with self._lock:
+            return self._decisions.get(tick)
 
-    def detect_divergence(
-        self, my_vector: StateVector, peer_vectors: list[StateVector]
-    ) -> float:
-        """Return 0.0–1.0 indicating how much this node differs from peers."""
-        if not peer_vectors:
-            return 0.0
-
-        same_count = sum(1 for v in peer_vectors if v.theta_hash == my_vector.theta_hash)
-        return 1.0 - (same_count / len(peer_vectors))
-
-    def is_safe_remote_theta(
-        self,
-        remote_theta: dict,
-        remote_vector: StateVector,
-    ) -> bool:
-        """H-4 gate: remote theta must pass local replay before application.
-
-        Caller is responsible for running ReplayValidator.
-        This method just verifies the vector passes basic sanity checks.
-        """
-        if remote_vector.envelope_state == "collapse":
-            return False
-        if remote_vector.drift_score > 0.9:  # extremely unstable
-            return False
-        if remote_vector.is_stale(self.config.stale_threshold_ms):
-            return False
-        return True
+    def get_votes(self, tick: int) -> List[ConsensusVote]:
+        with self._lock:
+            return list(self._votes.get(tick, []))

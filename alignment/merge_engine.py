@@ -21,14 +21,13 @@ Conflict resolution matrix:
 
 from __future__ import annotations
 
-import uuid
-import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
 from pathlib import Path
 import sys
 
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 from .branch import Branch, BranchStatus, BranchPoint, BranchStore
 from .equivalence import MergeDecision, Decision, EquivalenceChecker, BranchSummary, CheckpointSnapshot
 from .rollback_engine_v2 import RollbackResult, RollbackType
@@ -136,7 +135,7 @@ class MergeEngine:
           5. Mark both source branches as SUPERSEDED
           6. Emit MERGE_COMMIT event
         """
-        started = time.time_ns()
+        started = DeterministicClock.get_tick_ns()
 
         # Get both branches
         ba = self._branches.get(decision.l1.l1_equivalent and decision.l2.l2_equivalent and decision.l3.l3_equivalent)  # resolved via decision attrs
@@ -149,7 +148,7 @@ class MergeEngine:
         # Build branch point
         branch_point = BranchPoint(
             checkpoint_id=getattr(decision, 'lca_checkpoint_id', ''),
-            divergence_event_id=uuid.uuid4().hex,
+            divergence_event_id=DeterministicUUIDFactory.make_id('div', f'{branch_a_id}:{branch_b_id}', salt=''),
             branch_a_id=branch_a_id,
             branch_b_id=branch_b_id,
             divergence_ns=started,
@@ -177,7 +176,7 @@ class MergeEngine:
         self._branches.update_status(branch_b_id, BranchStatus.SUPERSEDED)
 
         log = MergeLog(
-            merge_id=uuid.uuid4().hex,
+            merge_id=DeterministicUUIDFactory.make_id('merge', f'{branch_a_id}:{branch_b_id}', salt=''),
             decision=Decision.MERGE,
             branch_a_id=branch_a_id,
             branch_b_id=branch_b_id,
@@ -187,7 +186,7 @@ class MergeEngine:
             conflicts_resolved=conflicts,
             causal_order=causal_order,
             started_at_ns=started,
-            committed_at_ns=time.time_ns(),
+            committed_at_ns=DeterministicClock.get_tick_ns(),
             confidence=decision.confidence,
         )
         self._logs.append(log)
@@ -348,7 +347,7 @@ class MergeEngine:
         One branch clearly dominates — mark the other as SUPERSEDED.
         No merge event emitted; the winning branch continues.
         """
-        started = time.time_ns()
+        started = DeterministicClock.get_tick_ns()
         winner_id = decision.winner_branch_id
         loser_id = (
             getattr(decision, '_branch_b_id', None)
@@ -360,7 +359,7 @@ class MergeEngine:
         self._branches.update_status(loser_id, BranchStatus.SUPERSEDED)
 
         log = MergeLog(
-            merge_id=uuid.uuid4().hex,
+            merge_id=DeterministicUUIDFactory.make_id('merge', f'{winner_id}:{loser_id}', salt=''),
             decision=Decision.KEEP_A if keep_branch == "a" else Decision.KEEP_B,
             branch_a_id=winner_id,
             branch_b_id=loser_id,
@@ -370,7 +369,7 @@ class MergeEngine:
             conflicts_resolved=[],
             causal_order=[],
             started_at_ns=started,
-            committed_at_ns=time.time_ns(),
+            committed_at_ns=DeterministicClock.get_tick_ns(),
             confidence=decision.confidence,
         )
         self._logs.append(log)
@@ -383,7 +382,7 @@ class MergeEngine:
         Branches are irreconcilable — mark both as IRRECONCILABLE.
         Both become terminal leaf branches. No convergence.
         """
-        started = time.time_ns()
+        started = DeterministicClock.get_tick_ns()
 
         branch_a_id = getattr(decision, '_branch_a_id', 'unknown')
         branch_b_id = getattr(decision, '_branch_b_id', 'unknown')
@@ -392,7 +391,7 @@ class MergeEngine:
         self._branches.update_status(branch_b_id, BranchStatus.IRRECONCILABLE)
 
         log = MergeLog(
-            merge_id=uuid.uuid4().hex,
+            merge_id=DeterministicUUIDFactory.make_id('merge', f'{branch_a_id}:{branch_b_id}', salt=''),
             decision=Decision.SPLIT,
             branch_a_id=branch_a_id,
             branch_b_id=branch_b_id,
@@ -402,7 +401,7 @@ class MergeEngine:
             conflicts_resolved=[],
             causal_order=[],
             started_at_ns=started,
-            committed_at_ns=time.time_ns(),
+            committed_at_ns=DeterministicClock.get_tick_ns(),
             confidence=decision.confidence,
         )
         self._logs.append(log)

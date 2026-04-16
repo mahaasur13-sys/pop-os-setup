@@ -1,7 +1,11 @@
 """otl.py v11.0 Observation Trust Layer."""
+from __future__ import annotations
+
+import hashlib
 from dataclasses import dataclass
 from enum import Enum, auto
-import random
+
+from core.deterministic import DeterministicClock, DeterministicRNG
 
 class TrustLevel(Enum):
     FULL = auto()
@@ -40,8 +44,11 @@ class SensorFusion:
         self.f = f_byzantine
         self._quorum = n_sensors - f_byzantine
         self._est = None
+        self._tick = 0  # track tick for deterministic RNG
 
     def update(self, readings):
+        # Advance tick for deterministic noise (ATOM-META-RL-021)
+        self._tick = DeterministicClock.advance()
         honest = [r for r in readings if not r.is_adversarial]
         if len(honest) <= self.f:
             return TrustedRealityEstimate(
@@ -175,7 +182,7 @@ if __name__ == "__main__":
     otl4 = OTL(n_sensors=2, f_byzantine=0)
     for i in range(5):
         for j in range(2):
-            noise = random.uniform(-0.2, 0.2)
+            noise = 0.0  # deterministic noise
             otl4.observe(f"s{j}", 0.8 + noise, i)
         otl4.fuse(actual=0.8)
     ts = otl4.trust_score()

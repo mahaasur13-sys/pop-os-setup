@@ -1,8 +1,10 @@
 """mcpc.py — v10.3 Model Consistency Proof Checker"""
 from __future__ import annotations
-import math, re, time, uuid
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
+
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 
 class MCPCStatus(Enum):
     COHERENT = 'coherent'
@@ -67,7 +69,7 @@ class MCPC:
         self.gcpl = gcpl_source; self.test = test_source; self.prover = prover_source
 
     def check(self):
-        t0 = time.time()
+        t0 = DeterministicClock.get_physical_time()
         drifts = []
         drifts += self._check_thresholds()
         drifts += self._check_ghost_functions()
@@ -80,7 +82,7 @@ class MCPC:
         if blocked_drifts: status = MCPCStatus.BLOCKED; blocked = True
         elif drifts: status = MCPCStatus.DRIFT_DETECTED
         return MCPCReport(
-            run_id=uuid.uuid4().hex[:12], status=status,
+            run_id=DeterministicUUIDFactory.make_id('mcpc', 'check', salt=''), status=status,
             overall_coherence=max(0.0, 1.0 - max_sev),
             drifts=drifts, blocked=blocked,
             model_divergence_score=min(1.0, len(drifts) * 0.2),
@@ -88,7 +90,7 @@ class MCPC:
             test_model_consistency=self._test_alignment(),
             semantic_drift_index=max_sev,
             metrics_coverage=self._compute_coverage(),
-            proof_coverage=0.85, elapsed_ms=(time.time() - t0) * 1000,
+            proof_coverage=0.85, elapsed_ms=(DeterministicClock.get_physical_time() - t0) * 1000,
         )
 
     def _check_thresholds(self):

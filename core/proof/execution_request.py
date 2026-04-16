@@ -4,10 +4,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
+
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 
 
 
@@ -67,8 +67,8 @@ class ExecutionRequest:
     proof: bytes
     signature: bytes
     issuer_id: str
-    nonce: str = field(default_factory=lambda: uuid.uuid4().hex)
-    timestamp: float = field(default_factory=lambda: time.time())
+    nonce: str = field(default_factory=lambda: DeterministicUUIDFactory.make_nonce('req', 0, seq=0))
+    timestamp: float = field(default_factory=lambda: DeterministicClock.get_physical_time())
     metadata: tuple = field(default_factory=tuple)  # immutable tuple of items
 
     # ── Derived properties ─────────────────────────────────────────────────
@@ -94,7 +94,7 @@ class ExecutionRequest:
     @property
     def is_expired(self) -> bool:
         """Check if request timestamp exceeds allowed clock skew (5 min)."""
-        return (time.time() - self.timestamp) > 300
+        return (DeterministicClock.get_physical_time() - self.timestamp) > 300
 
     # ── Factory ─────────────────────────────────────────────────────────────
 
@@ -118,8 +118,8 @@ class ExecutionRequest:
         Returns:
             ExecutionRequest with proof and signature populated
         """
-        nonce = uuid.uuid4().hex
-        timestamp = time.time()
+        nonce = DeterministicUUIDFactory.make_nonce('system', 0, seq=0)
+        timestamp = DeterministicClock.get_physical_time()
         payload_hash = hashlib.sha256(
             json.dumps(payload, sort_keys=True, default=str).encode()
         ).hexdigest()

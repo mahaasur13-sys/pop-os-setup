@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import time
 from dataclasses import dataclass, field
 from typing import Literal
 
+from core.deterministic import DeterministicClock, DeterministicUUIDFactory
 from orchestration.v8_2b_controlled_autocorrection.severity_mapper import SeverityLevel
 
 
@@ -19,7 +19,7 @@ class StateVector:
     envelope_state: Literal["stable", "warning", "critical", "collapse"]
     drift_score: float
     stability_score: float
-    timestamp_ns: int = field(default_factory=lambda: time.time_ns())
+    timestamp_ns: int = field(default_factory=lambda: DeterministicClock.get_tick_ns())
 
     # --- derived fields --------------------------------------------------
     @property
@@ -34,7 +34,7 @@ class StateVector:
 
     @property
     def age_ms(self) -> float:
-        return (time.time_ns() - self.timestamp_ns) / 1_000_000
+        return (DeterministicClock.get_tick_ns() - self.timestamp_ns) / 1_000_000
 
     def is_stale(self, max_age_ms: float = 30_000) -> bool:
         return self.age_ms > max_age_ms

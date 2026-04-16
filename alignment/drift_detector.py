@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import math
 import hashlib
-import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Optional
+
+from core.deterministic import DeterministicClock
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -489,7 +490,7 @@ class DriftEngine:
         return CompositeDriftReport(
             trace_id=trace.trace_id,
             plan_id=trace.plan_id,
-            computed_at_ns=time.time_ns(),
+            computed_at_ns=DeterministicClock.get_tick_ns(),
             layer1=l1,
             layer2=l2,
             layer3=l3,
