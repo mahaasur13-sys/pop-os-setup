@@ -2,6 +2,87 @@
 
 ## Release Notes
 
+### v1.7 — Neovim + LazyVim Full AI/K8s (2026-04-18)
+
+**Stage 18: Neovim + LazyVim**
+
+Full AI/K8s development environment via LazyVim starter:
+
+- Neovim 0.10+ installed via system package manager
+- LazyVim as base config (Lazy.nvim plugin manager)
+- Auto-syncs plugins on first launch via `:Lazy!`
+- Idempotent — skips if `~/.config/nvim` already exists
+
+**LSP servers (via Mason + nvim-lspconfig):**
+| Language | LSP Server |
+|----------|------------|
+| Python | `pyright` |
+| Lua | `lua_ls` |
+| YAML | `yamlls` |
+| Helm | `helm_ls` |
+| Terraform | `terraform_ls` |
+| Go | `gopls` |
+| Docker | `dockerls` |
+| JSON | `jsonls` |
+| Markdown | `marksman` |
+
+**Treesitter parsers:**
+`python`, `lua`, `yaml`, `hcl`, `dockerfile`, `bash`, `json`, `toml`, `markdown`
+
+**Key plugins included:**
+- `telescope.nvim` — fuzzy finder (files, git, grep, buffers)
+- `which-key.nvim` — keybinding hints
+- `gitsigns.nvim` — git status in gutter
+- `nvim-dap` + `nvim-dap-python` — Python debugging
+- `venv-selector.nvim` — Python venv management
+- `lazygit.nvim` — integrated terminal lazygit
+- `copilot.lua` — GitHub Copilot (requires token)
+
+**K8s-specific tooling:**
+- `kubectl` wrapper shortcuts (`:KubePods`, `:KubeContexts`)
+- YAML schema validation for k8s manifests
+- Helm file detection + LSP integration
+- Terraform HCL highlighting + validation
+
+**Theme:** Catppuccin Mocha (default LazyVim)
+
+**Usage:**
+```bash
+sudo bash Pop_OS_AI_Dev_Setup.sh --stage 18
+# or all stages:
+sudo bash Pop_OS_AI_Dev_Setup.sh
+```
+
+**Post-install (per-user, as your user):**
+```bash
+# Open Neovim — LazyVim auto-installs plugins
+nvim
+
+# In Neovim, install all LSP servers:
+:Lazy! sync   # or :MasonInstallAll (after Mason is ready)
+
+# Python DAP:
+:PyrightGeneralHook  # or :DapInstall python
+
+# Optional: GitHub Copilot
+:Copilot setup   # requires GITHUB_TOKEN env var
+```
+
+**Key shortcuts (LazyVim defaults):**
+| Shortcut | Action |
+|----------|--------|
+| `Space ff` | Find files |
+| `Space fg` | Grep (live) |
+| `Space fb` | Buffers |
+| `Space fh` | Help tags |
+| `Space gg` | LazyGit |
+| `Space dk` | K8s pods (if kubectl available) |
+| `gd` | Go to definition |
+| `gcc` | Comment line |
+| `Ctrl+\]` | Jump to definition |
+
+---
+
 ### v1.6 — MinIO S3 Object Store (2026-04-18)
 
 **Stage 17: MinIO S3 Object Store**
@@ -161,10 +242,11 @@ sudo bash Pop_OS_AI_Dev_Setup.sh
 | 15 | Longhorn Storage |
 | 16 | Rook Ceph (Block + FS + Object) |
 | 17 | MinIO S3 Object Store |
+| 18 | Neovim + LazyVim |
 
 ## Planned
 
 | Stage | Component | Status |
 |-------|-----------|--------|
-| 17 | MinIO (S3 backup target) | ✅ done (v1.6) |
-| 18 | Neovim + LazyVim | pending |
+| 18 | Neovim + LazyVim | ✅ done (v1.7) |
+| 19 | Tailscale Network Isolation + Cluster VPN Mesh | pending |

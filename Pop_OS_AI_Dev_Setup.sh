@@ -1,17 +1,17 @@
 #!/bin/bash
 #===============================================================================
-# Pop!_OS 24.04 NVIDIA — AI/Dev Workstation Auto-Setup v1.6
+# Pop!_OS 24.04 NVIDIA — AI/Dev Workstation Auto-Setup v1.7
 #===============================================================================
 # Target  : Pop!_OS 24.04 LTS NVIDIA Edition (USB Boot → Production Ready)
-# Stack   : KDE + Docker + CUDA + k3s + Longhorn + Rook Ceph + MinIO + Zsh + AI Stack
+# Stack   : KDE + Docker + CUDA + k3s + Longhorn + Rook Ceph + MinIO + Zsh + AI Stack + Neovim
 # Author  : asurdev | https://asurdev.zo.computer
-# Version : 1.6 (MinIO S3 Object Store)
+# Version : 1.7 (Neovim + LazyVim Full AI/K8s)
 #===============================================================================
 
 set -euo pipefail
 
 LOGFILE="/var/log/popos-setup-$(date +%Y%m%d-%H%M%S).log"
-SCRIPT_VERSION="1.6"
+SCRIPT_VERSION="1.7"
 CURRENT_USER="$(logname 2>/dev/null || echo "$SUDO_USER")"
 HOMEDIR="$(getent passwd "$CURRENT_USER" | cut -d: -f6)"
 
@@ -826,6 +826,29 @@ PVC_EOF
 }
 
 #===============================================================================
+# STAGE 18 — Neovim + LazyVim Full AI/K8s
+#===============================================================================
+stage18_neovim() {
+    log "=== STAGE 18: Neovim + LazyVim ==="
+    if ! command -v nvim &>/dev/null; then
+        apt install -y neovim 2>&1 | tail -3
+        logOk "Neovim installed"
+    else
+        logOk "Neovim already present"
+    fi
+    # Install LazyVim
+    if [[ ! -d "$HOMEDIR/.config/nvim" ]]; then
+        git clone --depth 1 https://github.com/LazyVim/starter ~/.config/nvim 2>&1 | tail -3
+        logOk "LazyVim installed"
+    else
+        logOk "LazyVim present"
+    fi
+    # Install plugins
+    nvim --headless +Lazy! +qa 2>&1 | tail -3
+    logOk "Neovim plugins installed"
+}
+
+#===============================================================================
 # MAIN
 #===============================================================================
 main() {
@@ -853,6 +876,7 @@ main() {
         15|all) stage15_longhorn ;;
         16|all) stage16_rookceph ;;
         17|all) stage17_minio ;;
+        18|all) stage18_neovim ;;
         *) echo "Unknown stage: $STAGE" ;;
     esac
 
@@ -864,5 +888,5 @@ main() {
 
 # Parse arguments
 STAGE="${1:-all}"
-SCRIPT_VERSION="1.6"
+SCRIPT_VERSION="1.7"
 main
