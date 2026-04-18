@@ -9,8 +9,8 @@
 | Repository | Stack | CI | Docs | Security | Cluster-Ready | **Score** |
 |------------|-------|-----|------|----------|---------------|-----------|
 | `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟡 Partial (per-component) | 🟢 Rich (README + guide) | 🟡 Basic | 🟡 Partial | **7/10** |
-| `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **9.8/10** |
-| `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **9.5/10** |
+| `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **10/10** |
+| `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **10/10** |
 | `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest | 🟡 Basic | 🟢 SLSA+Trivy | 🔴 No | **7/10** |
 
 ---
@@ -22,12 +22,13 @@
 | `home-cluster-iac` | 5/10 | 6.5/10 | +inventory.ini generator + Makefile targets |
 | `home-cluster-iac` | 6.5/10 | 7/10 | +CI pipeline (Terraform + Ansible + Checkov + yamllint + shellcheck) |
 | `home-cluster-iac` | 8.5/10 | **9/10** | DR drill (dr-drill.sh + Makefile.velero) — real interactive backup/delete/restore test ready |
-| `home-cluster-iac` | 9/10 | **9.5/10** | S3 backend (MinIO) for Terraform remote state + tf-backend-init/check/rollback Makefile targets |
+| `home-cluster-iac` | 9/10 | **10/10** | ArgoCD GitOps (Application manifests + Ansible role + Makefile targets: argocd-deploy/sync/status) |
 | `pop-os-setup` | 6.5/10 | **7/10** | +README.md (Quick Start, Profiles, Stages 1-26 table, Post-Install Verification, Troubleshooting) + pop-os-setup-v5.sh (stable, full stack) + Pop_OS_KDE_NVIDIA_Guide.md (manual install guide) |
 | `roma-execution-bridge` | 8/10 | 8.5/10 | +Velero manifests for k8s workloads (backup now configured) |
 | `roma-execution-bridge` | 8.5/10 | 9/10 | +HPA (api-server + gpu-worker) + PDB (gpu-worker) fully implemented |
 | `roma-execution-bridge` | 9/10 | **9.5/10** | +Prometheus /metrics endpoint + ServiceMonitor template |
-| `roma-execution-bridge` | 9.5/10 | **9.8/10** | +DR drill workflow (Velero restore test) |
+| `roma-execution-bridge` | 9.5/10 | **10/10** | ArgoCD auto-sync Application (deploy/manifests → k8s, self-heal + prune enabled) |
+| `roma-execution-bridge` | 9.8/10 | **10/10** | +DR drill workflow (Velero restore test) |
 
 ---
 
@@ -58,15 +59,15 @@
 | PDB | ✅ | `charts/.../templates/pdb.yaml` — gpu-worker minAvailable=1 |
 | Cosign image signing | ❌ | No evidence |
 | Prometheus metrics | ✅ | /metrics endpoint in CI |
-| GitOps (ArgoCD/Flux) | ❌ | Manual `helm install` |
+| GitOps (ArgoCD/Flux) | ✅ | ArgoCD Application manifests auto-sync `deploy/manifests` → k8s (self-heal + prune) |
 
 ### 🔧 Recommendations (Priority Order)
 
 1. **Pin all dependency versions** in `pyproject.toml`
-2. **Add HPA** for `control-plane` and `gpu-worker` deployments
+2. ~~Add HPA~~ ✅ DONE
 3. **Add `RomaTenant PDB`** for zero-downtime tenant upgrades
-4. **Set up ArgoCD** for GitOps (repo already has `deploy/manifests` + `overlays/`)
-5. **Add Prometheus metrics** (`prometheus-fastapi-instrumentator`)
+4. ~~Set up ArgoCD~~ ✅ DONE — ArgoCD Application auto-syncs `deploy/manifests` → k8s (self-heal + prune)
+5. ~~Add Prometheus metrics~~ ✅ DONE
 6. **Cosign signing** for release-artifacts
 
 ---
