@@ -53,7 +53,7 @@
 
 | Criterion | Status | Notes |
 |-----------|--------|-------|
-| Pinned dependencies | 🟡 | `fastapi>=0.115.0` (no upper bound) |
+| Pinned dependencies | ✅ | `fastapi>=0.115.0,<0.116` pattern applied to all deps |
 | Integration tests | 🟡 | Only `test_ci.py` (mock compile check) |
 | HPA/VPA | ✅ | `charts/.../templates/hpa.yaml` — api-server (CPU/Memory/GPU) + gpu-worker (GPU/work-queue) |
 | PDB | ✅ | `charts/.../templates/pdb.yaml` — gpu-worker minAvailable=1 |
@@ -63,7 +63,7 @@
 
 ### 🔧 Recommendations (Priority Order)
 
-1. **Pin all dependency versions** in `pyproject.toml`
+1. ~~Pin all dependency versions~~ ✅ DONE — upper bounds `<` applied to all deps (fastapi, uvicorn, pydantic, prometheus-fastapi-instrumentator, pyyaml, kubernetes)
 2. ~~Add HPA~~ ✅ DONE
 3. **Add `RomaTenant PDB`** for zero-downtime tenant upgrades
 4. ~~Set up ArgoCD~~ ✅ DONE — ArgoCD Application auto-syncs `deploy/manifests` → k8s (self-heal + prune)
@@ -199,7 +199,7 @@
 |---|--------|---------|
 | 1 | Add GitHub Actions CI to `home-cluster-iac` | home-cluster-iac |
 | 2 | ~~Add HPA to roma-execution-bridge~~ ✅ DONE | roma-execution-bridge |
-| 3 | Pin Python deps with upper bounds | All 4 repos |
+| 3 | ~~Pin Python deps with upper bounds~~ ✅ DONE | roma (66139dc) + AsurDev (d12e041) |
 | 4 | Fix `inventory.ini` missing | home-cluster-iac |
 
 ### High (next sprint)
