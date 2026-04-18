@@ -2,6 +2,46 @@
 
 ## Release Notes
 
+### v1.8 — Stage 19: Tailscale Network Isolation + Cluster VPN Mesh (2026-04-18)
+
+**Stage 19: Tailscale VPN + Cluster Mesh**
+
+- Tailscale installed via official install script
+- IP forwarding enabled (`/etc/sysctl.d/99-tailscale.conf`)
+- Funnel on port 443 for inbound traffic through Tailscale
+- Tailscale Serve routing local HTTPS services
+- Authkey support (`TAILSCALE_AUTHKEY` env var) for non-interactive join
+- Mesh-ready: other nodes join via `curl -fsSL https://tailscale.com/install.sh | sh - && sudo tailscale up`
+
+**Usage:**
+```bash
+# Interactive (manual auth):
+sudo bash Pop_OS_AI_Dev_Setup.sh --stage 19
+
+# Or all stages:
+sudo bash Pop_OS_AI_Dev_Setup.sh
+
+# With authkey (automation):
+TAILSCALE_AUTHKEY=tskey-auth-xxxx sudo bash Pop_OS_AI_Dev_Setup.sh --stage 19
+```
+
+**Post-install:**
+```bash
+# Verify connection:
+tailscale status
+
+# Enable funnel (already done by script):
+sudo tailscale funnel 443
+
+# Serve local service:
+sudo tailscale serve https+insecure://localhost:3000
+
+# Join existing tailnet:
+sudo tailscale up --authkey=<key>
+```
+
+---
+
 ### v1.7 — Neovim + LazyVim Full AI/K8s (2026-04-18)
 
 **Stage 18: Neovim + LazyVim**
@@ -249,4 +289,4 @@ sudo bash Pop_OS_AI_Dev_Setup.sh
 | Stage | Component | Status |
 |-------|-----------|--------|
 | 18 | Neovim + LazyVim | ✅ done (v1.7) |
-| 19 | Tailscale Network Isolation + Cluster VPN Mesh | pending |
+| 19 | Tailscale Network Isolation + Cluster VPN Mesh | ✅ done (v1.8) |
