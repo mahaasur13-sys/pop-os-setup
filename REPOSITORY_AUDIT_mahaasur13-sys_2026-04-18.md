@@ -11,7 +11,7 @@
 | `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟢 Root CI + Makefile (lint/stages/docs) | 🟢 Rich (README + guide + CONTRIBUTING) | 🟡 Basic | 🟡 Partial | **8/10** |
 | `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **10/10** |
 | `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **10/10** |
-| `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest+Deploy+Integration | 🟡 Basic | 🟢 SLSA+Trivy | 🟡 GHCR deploy | **8.5/10** |
+| `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest+Deploy+Integration | 🟡 Basic | 🟢 SLSA+Trivy+Backup | 🟡 GHCR deploy | **9/10** |
 
 ---
 
@@ -76,7 +76,7 @@
 
 ---
 
-## 2. `AsurDev` — 🟡 8.5/10
+## 2. `AsurDev` — 🟡 9/10
 
 > **Status:** CI+CD ready (GHCR deploy), integration tests added, development-grade
 
@@ -107,7 +107,7 @@
 1. ~~Fix codecov: remove `continue-on-error: true`~~ ✅ DONE — removed from `.github/workflows/ci.yml`
 2. ~~Add `deploy.yml`~~ ✅ DONE — GHCR push on push to main/tag (666c3ac), ml-api image built and pushed
 3. ~~Add integration tests for ML pipeline~~ ✅ DONE — `tests/integration/test_ml_pipeline.py` (997ee57)
-4. **Add Velero backup** for TimescaleDB + ML models
+4. ~~Add Velero backup for TimescaleDB + ML models~~ ✅ DONE — `k8s/manifests/velero/03-schedules.yaml`: asurdev in daily + weekly backup; dedicated `asurdev-models-backup` Schedule (04:00, PVC+StatefulSet); pre-hook `pg_dump -U postgres asurdev` for TimescaleDB; `Makefile.velero` updated with `asurdev-backup` target + `NAMESPACES+=asurdev`
 
 ---
 
