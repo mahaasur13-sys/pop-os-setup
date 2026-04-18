@@ -2,63 +2,169 @@
 
 ## Release Notes
 
-### v2.0 — Stable Release (2026-04-18)
+### v1.0.0 — ROMA Execution Bridge Production Release (2026-04-18)
 
-**🎯 Status: STABLE — Production Ready**
+> **Status: PRODUCTION** | Git tag [`v1.0.0`](https://github.com/mahaasur13-sys/roma-execution-bridge/releases/tag/v1.0.0) | Helm chart `roma-execution-bridge-1.0.0.tgz`
 
-> Это финальная стабильная версия. Stages 21–26 (`CUDA Toolkit (full)`, `ROS2`, `vLLM/Ollama`, full KDE) — вынесены в отдельные специализированные скрипты по запросу.
+**Artifacts:**
+- Git tag: `v1.0.0` → [github.com/mahaasur13-sys/roma-execution-bridge/releases/tag/v1.0.0](https://github.com/mahaasur13-sys/roma-execution-bridge/releases/tag/v1.0.0)
+- Helm chart: `release-artifacts/roma-execution-bridge-1.0.0.tgz` (21 KB, includes Bitnami common dependency)
+- Integration test: `scripts/integration-test.sh` (mock validation, exit 0)
 
-**Current Capabilities:**
+**What is ROMA Execution Bridge:**
+Closed-loop compute economy control plane for Kubernetes. GPU scheduling, Raft consensus, event sourcing, Stripe billing, multi-tenant SaaS with Kong API gateway, Vault secrets, cert-manager TLS, and RomaTenant CRD auto-provisioning.
 
-| # | Component | Status |
-|---|-----------|--------|
-| 1 | Preflight checks | ✅ |
-| 2 | System update | ✅ |
-| 3 | NVIDIA Driver (550+) | ✅ |
-| 4 | CUDA 12.4 + cuDNN | ✅ |
-| 5 | Docker CE + NVIDIA Container Toolkit | ✅ |
-| 6 | k3s + NVIDIA Device Plugin | ✅ |
-| 7 | Dev Toolchain (pyenv, htop, fzf...) | ✅ |
-| 8 | Zsh + Oh My Zsh + plugins | ✅ |
-| 9 | Security (UFW, fail2ban, unattended-upgrades, sysctl) | ✅ |
-| 10 | AI Stack (PyTorch 2.2 + Transformers + Gradio + LangChain) | ✅ |
-| 11 | GPU Monitoring (DCGM, nvtop, node-exporter) | ✅ |
-| 12 | KDE Plasma customization | ✅ |
-| 13 | Tailscale VPN (Funnel + Serve) | ✅ |
-| 14 | k3s Multi-Node + GPU labels + Tailscale IP | ✅ |
-| 15 | Longhorn Storage (CSI, Longhorn UI :30800) | ✅ |
-| 16 | Rook Ceph (Block + FS + Object + Dashboard :7000) | ✅ |
-| 17 | MinIO S3 (Tenant, Console :30901, S3 :30900) | ✅ |
-| 18 | Neovim + LazyVim (LSP + Treesitter + AI plugins) | ✅ |
-| 19 | Tailscale VPN Mesh (authkey-ready, Funnel on 443) | ✅ |
-| 20 | Monitoring (Prometheus 30d + Grafana + Loki 30Gi) | ✅ |
+**Sprint 2 changes since last release:**
+- Vault + SealedSecrets secret management
+- Kong API Gateway (rate limiting, tenant routing, branding injection)
+- Stripe webhook (async via Redis Stream, tenant sync)
+- cert-manager + Let's Encrypt TLS on all ingress
+- RomaTenant CRD + kopf operator (auto-provisioning)
+- Integration test suite (`scripts/integration-test.sh`)
 
-**What's Next (Stages 21–26 — separate scripts):**
+**Install:**
+```bash
+# From Helm chart:
+helm install roma oci://ghcr.io/mahaasur13-sys/charts/roma-execution-bridge \
+  --version 1.0.0 -n roma-system --create-namespace
 
-| Stage | Component | Priority |
-|-------|-----------|----------|
-| 21 | CUDA Toolkit (full, standalone deb) | 🟡 Low |
-| 22 | ROS2 Stack | 🟡 Low |
-| 23 | k3s Kubernetes (full, multi-master HA) | 🟡 Low |
-| 24 | Zsh + Oh My Zsh tuning (themes, completions) | 🟡 Low |
-| 25 | KDE Full Customization (latte-dock, window rules) | 🟡 Low |
-| 26 | AI Workstation (vLLM, Ollama, text-generation-webui) | 🟡 Medium |
+# Or from local tarball:
+helm install roma ./release-artifacts/roma-execution-bridge-1.0.0.tgz \
+  -n roma-system --create-namespace
+```
+
+**Quick test:**
+```bash
+make k8s-deploy-home      # Deploy to k3s
+make integration-test     # Run mock integration test
+```
+
+---
+
+### v4.0.0 — Combined Stable (2026-04-18)
+
+> **Status: STABLE** | Merged `v3.0.0` + `v2.0.0` → single unified script  
+> File: `pop-os-setup-v4.sh` (673 lines, bash syntax ✅ verified)
+
+**Changelog vs v3.0.0 + v2.0.0:**
+- ✅ Stages 1–20 in single script (was split across two files)
+- ✅ All 20 stages covered: base → GPU → AI → k8s → storage → monitoring
+- ✅ `RUNTIME` global (docker/podman), `USE_CUDA`/`GPU_DETECTED` flags
+- ✅ Longhorn Stage 16 (v1.6.1, smart replica count from node count)
+- ✅ Rook Ceph Stage 17 (v1.14.x, common + operator + cluster)
+- ✅ MinIO Stage 19 (tenant v1.4.0, 50Gi, longhorn storageClass)
+- ✅ Prometheus + Grafana + Loki Stage 20 (kube-prometheus-stack v6.x, 30d retention, 50Gi PVC)
+- ✅ Neovim + LazyVim Stage 18
+- ✅ Tailscale Funnel + Serve (Stage 12)
+- ✅ Jupyter systemd service (Stage 15)
+- ✅ Idempotent: skips already-installed components
+- ✅ `bash -n pop-os-setup-v4.sh` → ✅ Syntax OK
 
 **Quick Start:**
 ```bash
-# Full run (all stages):
-sudo bash Pop_OS_AI_Dev_Setup.sh
+# Full run (~30-60 min):
+sudo bash pop-os-setup-v4.sh
 
-# Single stage:
-sudo bash Pop_OS_AI_Dev_Setup.sh --stage 15
+# Syntax check:
+bash -n pop-os-setup-v4.sh
+
+# Single stage (by env var):
+SKIP_STAGES="1,2,3" sudo bash pop-os-setup-v4.sh
 ```
 
-**Use cases covered:**
-- roma-execution-bridge — GPU-кластер, k3s + MetalLB + Longhorn
-- home-cluster-iac — mini-AWS, storage (Ceph/Longhorn/MinIO), IaC-ready
-- AI development — PyTorch + CUDA + Transformers + Gradio + Neovim/LazyVim
-- Monitoring — Prometheus + Grafana + Loki (30d retention)
-- VPN Mesh — Tailscale (Funnel + Serve + authkey)
+**Stage Map (20 stages):**
+
+| # | Component | Type |
+|---|-----------|------|
+| 1 | Preflight checks | ✅ Auto |
+| 2 | System update | ✅ Auto |
+| 3 | NVIDIA Driver + system76-power | ✅ Auto (GPU) |
+| 4 | CUDA Toolkit 12.4 + cuDNN | 🔄 Interactive (GPU) |
+| 5 | Docker CE **или** Podman (choose) | 🔄 Interactive |
+| 6 | k3s + Helm + kubectl + NVIDIA device plugin | 🔄 Interactive |
+| 7 | Dev Toolchain | ✅ Auto |
+| 8 | Zsh + Oh My Zsh + plugins | ✅ Auto |
+| 9 | Security: UFW, fail2ban, sysctl tuning | 🔄 Interactive |
+| 10 | AI Stack: PyTorch (CPU↔GPU), TensorFlow, Jupyter, Ollama | 🔄 Interactive |
+| 11 | Monitoring: nvtop, glances, btop | 🔄 Interactive |
+| 12 | Tailscale VPN + Funnel + Serve | 🔄 Interactive |
+| 13 | KDE Plasma Desktop | 🔄 Interactive |
+| 14 | SWAP 4GB + Unattended-Upgrades (security-only, no auto-reboot) | ✅ Auto |
+| 15 | Jupyter Lab as systemd service | 🔄 Interactive |
+| 16 | Longhorn Storage (k3s) | 🔄 Interactive |
+| 17 | Rook Ceph (Block + FS + Object) | 🔄 Interactive |
+| 18 | Neovim + LazyVim (AI/K8s) | 🔄 Interactive |
+| 19 | MinIO S3 Object Store (k3s) | 🔄 Interactive |
+| 20 | Prometheus + Grafana + Loki (k3s) | 🔄 Interactive |
+
+**Conditional logic:**
+```
+GPU detected = yes + CUDA chosen → PyTorch cu124 + TensorFlow [and-cuda]
+GPU detected = no               → PyTorch CPU + TensorFlow (CPU)
+k3s not installed                → Stages 16–20 (storage/monitoring) skipped
+```
+
+**Failure conditions → abort:**
+- No internet on Stage 1
+- GPU not detected (CUDA stages auto-skipped, not aborted)
+
+---
+
+### v3.0.0 — AI/Dev Workstation v3 (2026-04-18)
+
+**🎯 Status: STABLE — Production Ready**
+
+> Исправленная версия v2.0. Устранены конфликты PyTorch/CUDA, добавлены Docker/Podman выбор, условные stage, интерактивные диалоги.
+
+**Что исправлено vs v2.0:**
+
+- ✅ PyTorch CPU ↔ GPU: условная установка по результату `nvidia-smi`
+- ✅ Docker ↔ Podman: интерактивный выбор на Stage 6
+- ✅ CUDA: только если GPU обнаружен, иначе пропускается
+- ✅ fail2ban: только если пользователь подтвердит (SSH-доступ извне)
+- ✅ unattended-upgrades: security-only, `Automatic-Reboot "false"` (не убьёт training в 3 AM)
+- ✅ sysctl: явные параметры (`vm.swappiness`, `tcp_rmem/wmem` для больших моделей)
+- ✅ system76-power: опционально (для ноутбуков с гибридной графикой)
+- ✅ Stages 12–15: теперь не пропущены (k3s, мониторинг, Jupyter)
+
+**Quick Start:**
+```bash
+# Full run (all stages, ~20-40 min):
+sudo bash pop-os-setup.sh
+
+# With Tailscale authkey (automation):
+TAILSCALE_AUTHKEY=tskey-xxxx sudo bash pop-os-setup.sh
+
+# Syntax check only:
+bash -n pop-os-setup.sh
+```
+
+**Stage Map:**
+
+| # | Component | Type |
+|---|-----------|------|
+| 1 | Preflight & System Update | ✅ Auto |
+| 2 | NVIDIA Driver + system76-power | ✅ Auto (GPU) |
+| 3 | Dev Toolchain (git, htop, tmux, neovim...) | ✅ Auto |
+| 4 | Zsh + Oh My Zsh + plugins | ✅ Auto |
+| 5 | KDE Plasma Desktop | ✅ Auto |
+| 6 | Docker **или** Podman (choose) | 🔄 Interactive |
+| 7 | CUDA Toolkit 12.4 + cuDNN | 🔄 Interactive (GPU) |
+| 8 | AI Stack: PyTorch (CPU/GPU), TF, Jupyter, HF, Ollama | 🔄 Interactive |
+| 9 | Security: UFW, fail2ban, sysctl tuning | 🔄 Interactive |
+| 10 | SSH Server | ✅ Auto |
+| 11 | SWAP 4GB + Unattended-Upgrades (security only) | ✅ Auto |
+| 12 | Tailscale VPN + Funnel + Serve | 🔄 Interactive |
+| 13 | k3s + Helm + kubectl | 🔄 Interactive |
+| 14 | Monitoring: nvtop, glances, btop | 🔄 Interactive |
+| 15 | Jupyter Lab as systemd service | 🔄 Interactive |
+
+**Conditional logic ( ключевое ):**
+```
+GPU detected = yes + CUDA chosen → PyTorch cu124 + TensorFlow [and-cuda]
+GPU detected = no               → PyTorch CPU + TensorFlow (CPU)
+GPU not detected               → Stage 7 (CUDA) skipped entirely
+```
 
 ---
 
