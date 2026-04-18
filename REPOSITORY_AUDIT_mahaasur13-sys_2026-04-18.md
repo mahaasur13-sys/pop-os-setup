@@ -11,7 +11,7 @@
 | `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟡 Partial | 🟢 Rich (README + guide + CONTRIBUTING) | 🟡 Basic | 🟡 Partial | **7.5/10** |
 | `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **10/10** |
 | `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **10/10** |
-| `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest | 🟡 Basic | 🟢 SLSA+Trivy | 🔴 No | **7/10** |
+| `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest | 🟡 Basic | 🟢 SLSA+Trivy | 🔴 No | **7.5/10** |
 
 ---
 
@@ -29,6 +29,7 @@
 | `roma-execution-bridge` | 9/10 | **9.5/10** | +Prometheus /metrics endpoint + ServiceMonitor template |
 | `roma-execution-bridge` | 9.5/10 | **10/10** | ArgoCD auto-sync Application (deploy/manifests → k8s, self-heal + prune enabled) |
 | `roma-execution-bridge` | 9.8/10 | **10/10** | +DR drill workflow (Velero restore test) |
+| `AsurDev` | 7/10 | **7.5/10** | +codecov `continue-on-error` removed from CI |
 
 ---
 
@@ -72,7 +73,7 @@
 
 ---
 
-## 2. `AsurDev` — 🟡 7/10
+## 2. `AsurDev` — 🟡 7.5/10
 
 > **Status:** CI-ready, development-grade, not production
 
@@ -90,7 +91,7 @@
 | Criterion | Status | Notes |
 |-----------|--------|-------|
 | No integration tests | 🟡 | Only `tests/test_ml_api.py` visible |
-| `codecov` `continue-on-error` | ⚠️ | Hides real coverage failures |
+| `codecov` `continue-on-error` | ✅ | Removed from CI |
 | No deployment pipeline | 🔴 | `ml-api-docker-run` is manual |
 | Backup/restore docs | 🔴 | None |
 | No GitOps | 🔴 | Manual `make ml-api-run-prod` |
@@ -99,7 +100,7 @@
 
 ### 🔧 Recommendations
 
-1. **Fix codecov:** remove `continue-on-error: true`
+1. ~~Fix codecov: remove `continue-on-error: true`~~ ✅ DONE — removed from `.github/workflows/ci.yml`
 2. **Add integration tests** for ML pipeline (train → predict → metrics)
 3. **Add `deploy.yml`** for Docker image build → GHCR push
 4. **Add Velero backup** for TimescaleDB + ML models
