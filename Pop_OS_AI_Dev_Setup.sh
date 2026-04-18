@@ -1,17 +1,18 @@
 #!/bin/bash
 #===============================================================================
-# Pop!_OS 24.04 NVIDIA — AI/Dev Workstation Auto-Setup v1.7
+# Pop!_OS 24.04 NVIDIA — AI/Dev Workstation Auto-Setup v2.0
 #===============================================================================
 # Target  : Pop!_OS 24.04 LTS NVIDIA Edition (USB Boot → Production Ready)
-# Stack   : KDE + Docker + CUDA + k3s + Longhorn + Rook Ceph + MinIO + Zsh + AI Stack + Neovim
+# Stack   : KDE + Docker + CUDA 12.4 + k3s + Longhorn + Rook Ceph + MinIO + Zsh
+#           + Neovim/LazyVim + Tailscale VPN + Prometheus + Grafana + Loki
 # Author  : asurdev | https://asurdev.zo.computer
-# Version : 1.7 (Neovim + LazyVim Full AI/K8s)
+# Version : 2.0.0 (2026-04-18) — Stable Release
 #===============================================================================
 
 set -euo pipefail
 
 LOGFILE="/var/log/popos-setup-$(date +%Y%m%d-%H%M%S).log"
-SCRIPT_VERSION="1.7"
+SCRIPT_VERSION="2.0.0"
 CURRENT_USER="$(logname 2>/dev/null || echo "$SUDO_USER")"
 HOMEDIR="$(getent passwd "$CURRENT_USER" | cut -d: -f6)"
 

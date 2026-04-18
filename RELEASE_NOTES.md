@@ -2,6 +2,66 @@
 
 ## Release Notes
 
+### v2.0 — Stable Release (2026-04-18)
+
+**🎯 Status: STABLE — Production Ready**
+
+> Это финальная стабильная версия. Stages 21–26 (`CUDA Toolkit (full)`, `ROS2`, `vLLM/Ollama`, full KDE) — вынесены в отдельные специализированные скрипты по запросу.
+
+**Current Capabilities:**
+
+| # | Component | Status |
+|---|-----------|--------|
+| 1 | Preflight checks | ✅ |
+| 2 | System update | ✅ |
+| 3 | NVIDIA Driver (550+) | ✅ |
+| 4 | CUDA 12.4 + cuDNN | ✅ |
+| 5 | Docker CE + NVIDIA Container Toolkit | ✅ |
+| 6 | k3s + NVIDIA Device Plugin | ✅ |
+| 7 | Dev Toolchain (pyenv, htop, fzf...) | ✅ |
+| 8 | Zsh + Oh My Zsh + plugins | ✅ |
+| 9 | Security (UFW, fail2ban, unattended-upgrades, sysctl) | ✅ |
+| 10 | AI Stack (PyTorch 2.2 + Transformers + Gradio + LangChain) | ✅ |
+| 11 | GPU Monitoring (DCGM, nvtop, node-exporter) | ✅ |
+| 12 | KDE Plasma customization | ✅ |
+| 13 | Tailscale VPN (Funnel + Serve) | ✅ |
+| 14 | k3s Multi-Node + GPU labels + Tailscale IP | ✅ |
+| 15 | Longhorn Storage (CSI, Longhorn UI :30800) | ✅ |
+| 16 | Rook Ceph (Block + FS + Object + Dashboard :7000) | ✅ |
+| 17 | MinIO S3 (Tenant, Console :30901, S3 :30900) | ✅ |
+| 18 | Neovim + LazyVim (LSP + Treesitter + AI plugins) | ✅ |
+| 19 | Tailscale VPN Mesh (authkey-ready, Funnel on 443) | ✅ |
+| 20 | Monitoring (Prometheus 30d + Grafana + Loki 30Gi) | ✅ |
+
+**What's Next (Stages 21–26 — separate scripts):**
+
+| Stage | Component | Priority |
+|-------|-----------|----------|
+| 21 | CUDA Toolkit (full, standalone deb) | 🟡 Low |
+| 22 | ROS2 Stack | 🟡 Low |
+| 23 | k3s Kubernetes (full, multi-master HA) | 🟡 Low |
+| 24 | Zsh + Oh My Zsh tuning (themes, completions) | 🟡 Low |
+| 25 | KDE Full Customization (latte-dock, window rules) | 🟡 Low |
+| 26 | AI Workstation (vLLM, Ollama, text-generation-webui) | 🟡 Medium |
+
+**Quick Start:**
+```bash
+# Full run (all stages):
+sudo bash Pop_OS_AI_Dev_Setup.sh
+
+# Single stage:
+sudo bash Pop_OS_AI_Dev_Setup.sh --stage 15
+```
+
+**Use cases covered:**
+- roma-execution-bridge — GPU-кластер, k3s + MetalLB + Longhorn
+- home-cluster-iac — mini-AWS, storage (Ceph/Longhorn/MinIO), IaC-ready
+- AI development — PyTorch + CUDA + Transformers + Gradio + Neovim/LazyVim
+- Monitoring — Prometheus + Grafana + Loki (30d retention)
+- VPN Mesh — Tailscale (Funnel + Serve + authkey)
+
+---
+
 ### v1.9 — Stage 20: Monitoring Stack (Prometheus + Grafana + Loki) (2026-04-18)
 
 **Stage 20: Monitoring Stack**
