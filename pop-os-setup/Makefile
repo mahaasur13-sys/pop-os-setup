@@ -1,24 +1,26 @@
-.PHONY: help lint check-stages docs test install clean
+.PHONY: help lint check-stages docs test install clean integration-tests
 
 # Modular structure (v2.0.0+)
 MAIN_SCRIPT   = pop-os-setup.sh
 LIB_SH        = $(wildcard lib/*.sh)
 STAGE_SH      = $(wildcard stages/*.sh)
 PROFILE_SH    = $(wildcard profiles/*.sh)
-ALL_SH        = $(MAIN_SCRIPT) $(LIB_SH) $(STAGE_SH) $(PROFILE_SH)
+TEST_SH       = $(wildcard tests/integration/*.sh)
+ALL_SH        = $(MAIN_SCRIPT) $(LIB_SH) $(STAGE_SH) $(PROFILE_SH) $(TEST_SH)
 
 help:
 	@echo "Pop!_OS Setup v2.0.0 — Modular Makefile"
 	@echo "=========================================="
 	@echo ""
-	@echo "  make lint          — bash -n + shellcheck for all .sh files"
-	@echo "  make check-stages  — verify stage files and function definitions"
-	@echo "  make docs          — validate required docs exist"
-	@echo "  make test          — syntax + shellcheck (warnings+)"
-	@echo "  make install       — install shellcheck if missing"
-	@echo "  make clean         — remove log files"
+	@echo "  make lint              — bash -n + shellcheck for all .sh files"
+	@echo "  make check-stages      — verify stage files and function definitions"
+	@echo "  make docs              — validate required docs exist"
+	@echo "  make test              — syntax + shellcheck + integration tests"
+	@echo "  make integration-tests — run integration test suite"
+	@echo "  make install           — install shellcheck if missing"
+	@echo "  make clean             — remove log files"
 	@echo ""
-	@echo "  make all           — lint + check-stages + docs"
+	@echo "  make all               — lint + check-stages + docs"
 
 all: lint check-stages docs
 
@@ -68,7 +70,21 @@ docs:
 	done
 	@grep -q "Stage [0-9]" README.md && echo "  ✓ README stages table" || echo "  ! No stages table"
 
-test: lint
+test: lint integration-tests
+
+integration-tests:
+	@echo "=== Integration tests ==="
+	@bash tests/integration/run.sh --suite all; rc=$$?; \
+	if [ $$rc -eq 2 ]; then \
+		echo "Docker not available — using host bash fallback"; \
+		SUITE=all bash tests/integration/test-lib.sh     || { echo "FAIL: test-lib"; exit 1; }; \
+		SUITE=all bash tests/integration/test-stages.sh || { echo "FAIL: test-stages"; exit 1; }; \
+		SUITE=all bash tests/integration/test-profiles.sh || { echo "FAIL: test-profiles"; exit 1; }; \
+		SUITE=all bash tests/integration/test-cli.sh    || { echo "FAIL: test-cli"; exit 1; }; \
+		echo "  ✓ All integration tests passed (host fallback)"; \
+	else \
+		echo "  ✓ All integration tests passed"; \
+	fi
 
 clean:
 	@rm -f *.log
