@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atomos-agents"
+version = "0.1.0"
+description = "ATOM OS Agent layer — TAAR, policy kernels, swarm, CI tools"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+# agents/ is a flat-layout workspace with 90+ top-level modules.
+# Explicitly list critical modules needed by atomos_pkg.
+py-modules = ["policy_kernel_v4", "ci_analyzer", "devops_agent", "swarm", "taar_v14", "taar_v15"]

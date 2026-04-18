@@ -1,0 +1,101 @@
+{
+  "version": "v4.5",
+  "timestamp": "2026-04-10T10:57:18.595377+00:00",
+  "system": "CVG_LCCP_ENGINE",
+  "lccp_version": "v1.2",
+  "slsa_level_target": 4,
+  "commits": {
+    "AsurDev": {
+      "commit": "e94be47c88527349f9a630b0304d572ff04648b5",
+      "path": "/home/workspace/AsurDev",
+      "remote": "mahaasur13-sys/AsurDev"
+    },
+    "home-cluster-iac": {
+      "commit": "b9965d16464a65da69d58da23fe836c09e31d9c9",
+      "path": "/home/workspace/home-cluster-iac",
+      "remote": "mahaasur13-sys/home-cluster-iac"
+    }
+  },
+  "manifests": {
+    "AsurDev": {
+      "source": "git-index",
+      "canonical": true,
+      "count": 265,
+      "manifest_hash": "d5f31690aa93e1416e224a521f7edec5af89301406449e91ce61c9cbbe344730"
+    },
+    "home-cluster-iac": {
+      "source": "git-index",
+      "canonical": true,
+      "count": 429,
+      "manifest_hash": "0577790bf28f0a23b265fe1381a6143eaafa53b649a5d5b612bf53c9a4eb224a"
+    }
+  },
+  "lccp_results": {
+    "AsurDev": {
+      "deterministic": true,
+      "valid": true,
+      "output_hash": "a70fff492b88279b15e684f9377d6bca51e933267c9ba5d299f5e4a6d3ec6260",
+      "exit": 0
+    },
+    "home-cluster-iac": {
+      "deterministic": true,
+      "valid": true,
+      "output_hash": "a70fff492b88279b15e684f9377d6bca51e933267c9ba5d299f5e4a6d3ec6260",
+      "exit": 0
+    }
+  },
+  "provenance": {
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "subject": [
+      {
+        "name": "multi-repo-system",
+        "digest": {
+          "sha256": "c903d24628532a7981d5cda10dd8358ac60d6e9c"
+        }
+      }
+    ],
+    "predicate": {
+      "buildDefinition": {
+        "repository": {
+          "uri": "https://github.com/mahaasur13-sys"
+        },
+        "gitIndexBased": true,
+        "deterministic": true
+      },
+      "runDetails": {
+        "builder": {
+          "id": "https://github.com/mahaasur13-sys/CVG_LCCP_ENGINE"
+        }
+      },
+      "materials": [
+        {
+          "uri": "git+https://github.com/mahaasur13-sys/AsurDev@e94be47c88527349f9a630b0304d572ff04648b5"
+        },
+        {
+          "uri": "git+https://github.com/mahaasur13-sys/home-cluster-iac@b9965d16464a65da69d58da23fe836c09e31d9c9"
+        }
+      ]
+    },
+    "predicate_digest": "f1f3d63946e1e5fc37498deb21a0e267e9d351e05e96981b62f4103a168d8737"
+  },
+  "external_attestation": {
+    "verified": false,
+    "method": "NONE",
+    "reason": "NO_EXTERNAL_TRUST_ANCHOR_AVAILABLE"
+  },
+  "release_gate": {
+    "release_allowed": false,
+    "reason": "NO_EXTERNAL_TRUST_ANCHOR",
+    "hard_rule": "RELEASE=f(external_signature_verified)"
+  },
+  "gates": {
+    "G1_G1_commit": "PASS",
+    "G2_G2_manifest": "PASS",
+    "G3_G3_provenance": "PASS",
+    "G4_G4_lccp": "PASS",
+    "G5_G5_crossrepo": "PASS",
+    "G6_G6_external_sig": "FAIL"
+  },
+  "system_state": "SLSA_LEVEL_3_INTERNAL_ONLY",
+  "bundle_hash": "b5f7a66922f2dffb9868678f74c196a294df22853fd3fce987296bcf581e8d4c"
+}

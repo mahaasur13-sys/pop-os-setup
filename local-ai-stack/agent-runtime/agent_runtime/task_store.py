@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -24,7 +25,7 @@ from typing import Optional
 import redis.asyncio as aioredis
 import redis
 
-REDIS_URL = redis.environ.get("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
 STATE_PREFIX = "task_state:"
 RESULT_PREFIX = "result:"

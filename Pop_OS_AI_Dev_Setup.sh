@@ -890,3 +890,113 @@ main() {
 STAGE="${1:-all}"
 SCRIPT_VERSION="1.7"
 main
+
+#===============================================================================
+# STAGE 20 — Monitoring Stack (Prometheus + Grafana + Loki)
+#===============================================================================
+stage20_monitoring() {
+    log "=== STAGE 20: Monitoring Stack ==="
+
+    # --- Prometheus ---
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>&1 | grep -v "already exists" || true
+    helm repo update 2>&1 | tail -2
+
+    if ! helm list -n monitoring 2>/dev/null | grep -q "prometheus"; then
+        kubectl create namespace monitoring 2>/dev/null || true
+        helm install prometheus prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --set prometheus.prometheusSpec.retention=30d \
+            --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.resources.requests.storage=50Gi \
+            --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.storageClassName=longhorn \
+            --set grafana.persistence.storageClassName=longhorn \
+            --set grafana.persistence.size=10Gi \
+            --set alertmanager.persistentVolume.storageClass=longhorn \
+            2>&1 | tail -5
+        logOk "Prometheus + Grafana deployed"
+    else
+        logOk "Prometheus already installed"
+    fi
+
+    # --- Loki (replaces Prometheus for logs) ---
+    if ! helm list -n monitoring 2>/dev/null | grep -q "loki"; then
+        helm install loki grafana/loki \
+            --namespace monitoring \
+            --set persistence.storageClassName=longhorn \
+            --set persistence.size=30Gi \
+            2>&1 | tail -3
+        logOk "Loki deployed"
+    else
+        logOk "Loki already present"
+    fi
+
+    # --- Node Exporter (already in k3s stage, ensure running) ---
+    kubectl patch ds -n kube-system prometheus-node-exporter -p '{"spec":{"template":{"spec":{"tolerations":[{"key":"node-role.kubernetes.io/controlplane","operator":"Exists","effect":"NoSchedule"},{"key":"node-role.kubernetes.io/master","operator":"Exists","effect":"NoSchedule"}]}}}}' 2>/dev/null || true
+
+    echo ""
+    echo "=============================================="
+    echo "  📊 Monitoring Stack:"
+    echo "=============================================="
+    echo "    Prometheus:  http://localhost:30090"
+    echo "    Grafana:     http://localhost:30080   (admin/prom-operator)"
+    echo "    Loki:        http://localhost:3100"
+    echo "    Node exp.:   http://localhost:30100"
+    echo ""
+    echo "  Port-forward commands:"
+    echo "    kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-prometheus 30090:9090 &"
+    echo "    kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 30080:80 &"
+    echo ""
+    echo "  Default creds:"
+    echo "    Grafana admin:  admin / prom-operator"
+    echo "  Get password: kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d"
+    echo ""
+    echo "  Dashboards to import:"
+    echo "    - 1860 (Node Exporter Full)"
+    echo "    - 12740 (NVIDIA GPU Dashboard)"
+    echo "    - 15855 (Loki dashboard)"
+    echo ""
+}
+
+#===============================================================================
+# MAIN
+#===============================================================================
+main() {
+    echo "=============================================="
+    echo "  Pop!_OS 24.04 — AI/Dev Workstation Setup"
+    echo "  Version: ${SCRIPT_VERSION:-1.8.0}  |  Stage: ${STAGE:-all}"
+    echo "=============================================="
+
+    # Run selected stage(s)
+    case "${STAGE:-all}" in
+        1|all)  stage01_preflight ;;
+        2|all)  stage02_update    ;;
+        3|all)  stage03_nvidia    ;;
+        4|all)  stage04_cuda     ;;
+        5|all)  stage05_docker   ;;
+        6|all)  stage06_k3s      ;;
+        7|all)  stage07_devtools ;;
+        8|all)  stage08_zsh      ;;
+        9|all)  stage09_security ;;
+        10|all) stage10_ai_stack ;;
+        11|all) stage11_monitoring ;;
+        12|all) stage12_kde      ;;
+        13|all) stage13_tailscale ;;
+        14|all) stage14_k3s_multinode ;;
+        15|all) stage15_longhorn ;;
+        16|all) stage16_rookceph ;;
+        17|all) stage17_minio ;;
+        18|all) stage18_neovim ;;
+        19|all) stage19_tailscale ;;
+        20|all) stage20_monitoring ;;
+        *) echo "Unknown stage: $STAGE" ;;
+    esac
+
+    echo ""
+    echo "=============================================="
+    echo "  ✅ Setup complete! Stage: ${STAGE:-all}"
+    echo "=============================================="
+}
+
+# Parse arguments
+STAGE="${1:-all}"
+SCRIPT_VERSION="1.8"
+main

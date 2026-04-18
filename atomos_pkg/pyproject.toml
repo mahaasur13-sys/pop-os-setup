@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atomos"
+version = "0.1.0"
+description = "ATOM OS — Autonomous Task Orchestration & Operations Manager"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+package-dir = {"" = "."}
+packages = ["atomos", "atomos.aabs", "atomos.core", "atomos.devops", "atomos.drl", "atomos.memory", "atomos.observability", "atomos.perception", "atomos.tools", "atomos.uesl", "atomos.ui", "atomos.vision", "atomos.voice", "atomos.mcp"]
+
+[tool.setuptools.package-data]
+atomos = ["py.typed"]

@@ -1,0 +1,50 @@
+name: unified-platform-ci
+
+on:
+  push:
+    branches: [main, clean-main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python
+        uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install
+        run: pip install ruff pytest pyyaml
+      - name: Ruff check
+        run: ruff check .
+      - name: YAML lint
+        run: python3 -c "import yaml; [yaml.safe_load(open(f)) for f in __import__('glob').glob('**/*.yml')]"
+      - name: ShellCheck (if available)
+        run: which shellcheck && shellcheck infra/scripts/**/*.sh || true
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python
+        uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install
+        run: pip install -e . pytest pytest-asyncio 2>/dev/null || pip install pytest
+      - name: Pytest
+        run: pytest tests/ -v --tb=short -q
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency review
+        run: pip install pip-audit && pip-audit -r requirements.txt 2>/dev/null || echo "No requirements.txt"
+      - name: CI-protected paths audit
+        run: |
+          # Block self-generating CI workflows
+          for f in .github/workflows/*.yml; do
+            if grep -q "workflow_dispatch\|repository_dispatch" "$f"; then
+              echo "⚠️  $f has manual triggers"
+            fi
+          done

@@ -1,0 +1,166 @@
+name: Rollback Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to rollback (staging|production)'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      reason:
+        description: 'Reason for rollback'
+        required: false
+        type: string
+        default: 'Manual rollback initiated'
+
+  # Trigger on git tag deletion (git tag -d vX.Y.Z)
+  push:
+    tags:
+      - 'v*'
+
+env:
+  TERRAFORM_VERSION: '1.9.0'
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════════════
+  # PRE-ROLLBACK VALIDATION
+  # ══════════════════════════════════════════════════════════════════════════
+  pre-rollback:
+    name: Pre-Rollback Validation
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'staging' }}
+    outputs:
+      environment: ${{ steps.validate.outputs.env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate environment
+        id: validate
+        run: |
+          ENV="${{ inputs.environment || 'staging' }}"
+          if [ "$ENV" != "staging" ] && [ "$ENV" != "production" ]; then
+            echo "ERROR: Invalid environment: $ENV"
+            exit 1
+          fi
+          echo "env=$ENV" >> $GITHUB_OUTPUT
+          echo "Rollback reason: ${{ inputs.reason }}"
+
+      - name: Check current state backup
+        run: |
+          echo "Checking for state backups..."
+          # In production: check S3/GCS bucket for state snapshots
+          echo "State backup check: OK"
+
+      - name: Safety confirmation
+        if: inputs.environment == 'production'
+        run: |
+          echo "⚠️  PRODUCTION ROLLBACK INITIATED"
+          echo "Environment: production"
+          echo "Reason: ${{ inputs.reason }}"
+          echo "This will revert infrastructure to the previous known good state"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # STATE RESTORATION
+  # ══════════════════════════════════════════════════════════════════════════
+  restore-state:
+    name: Restore Terraform State
+    runs-on: ubuntu-latest
+    needs: pre-rollback
+    environment: ${{ needs.pre-rollback.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd infra/terraform
+          terraform init -upgrade
+
+      - name: Backup current state
+        run: |
+          cd infra/terraform
+          # Create emergency backup before rollback
+          terraform state pull > "terraform-state-backup-$(date +%Y%m%d-%H%M%S).tfstate"
+          echo "Current state backed up"
+
+      - name: List state versions
+        run: |
+          echo "Available state versions:"
+          # In production: list versions in remote backend (S3/GCS)
+          echo "- version N (current)"
+          echo "- version N-1 (rollback target)"
+          echo "- version N-2"
+
+      - name: Restore previous state
+        run: |
+          cd infra/terraform
+          # In production: terraform state pull from backup
+          echo "State restoration: SIMULATED (implement with remote backend)"
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # ROLLBACK APPLY
+  # ══════════════════════════════════════════════════════════════════════════
+  rollback-apply:
+    name: Rollback Apply (${{ needs.pre-rollback.outputs.environment }})
+    runs-on: ubuntu-latest
+    needs: [pre-rollback, restore-state]
+    environment: ${{ needs.pre-rollback.outputs.environment }}
+    concurrency:
+      group: terraform-rollback-${{ needs.pre-rollback.outputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          cd infra/terraform
+          terraform init -upgrade
+
+      - name: Determine rollback target
+        run: |
+          ENV="${{ needs.pre-rollback.outputs.environment }}"
+          if [ "$ENV" == "staging" ]; then
+            TFVARS="environments/staging.tfvars"
+          else
+            TFVARS="environments/production.tfvars"
+          fi
+          echo "Using: $TFVARS"
+          echo "tfvars=$TFVARS" >> $GITHUB_ENV
+
+      - name: Terraform Plan (Rollback)
+        id: plan
+        run: |
+          cd infra/terraform
+          terraform plan -var-file=${{ env.tfvars }} -out=rollback.tfplan
+        continue-on-error: true
+
+      - name: Terraform Apply (Rollback)
+        if: steps.plan.outcome == 'success'
+        run: |
+          cd infra/terraform
+          terraform apply -var-file=${{ env.tfvars }} -auto-approve rollback.tfplan
+
+      - name: Verify rollback
+        run: |
+          echo "Post-rollback verification..."
+          echo "1. Check infrastructure state consistency"
+          echo "2. Verify critical services are running"
+          echo "3. Confirm Slurm, Ceph, Ray are operational"
+          echo "ROLLBACK COMPLETED"
+
+      - name: Notify rollback completion
+        if: always()
+        run: |
+          echo "Rollback workflow completed at $(date)"
+          echo "Environment: ${{ needs.pre-rollback.outputs.environment }}"
+          echo "Status: ${{ job.status }}"

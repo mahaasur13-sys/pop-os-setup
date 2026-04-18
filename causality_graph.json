@@ -1,0 +1,31 @@
+{
+  "schema": "cvg.causality.v5",
+  "version": "5.0",
+  "causal_edges": 14,
+  "nodes": 15,
+  "edges": 14,
+  "graph": [
+    {
+      "parent": "13c45b65-bcdb-4d26-a278-91ea685322c8",
+      "parent_job": "home-cluster-iac:GENESIS",
+      "children": [
+        "f5b687d8-c13a-4659-9060-b8dfb2de5d49"
+      ]
+    },
+    {
+      "parent": "335fb80d-68ad-47a9-9062-e68e82541153",
+      "parent_job": "home-cluster-iac:g0_setup",
+      "children": [
+        "d25881bc-8aa2-402a-9523-bf1d124d3bad"
+      ]
+    },
+    {
+      "parent": "3660549c-265f-4e33-bdf1-84e7a89ac016",
+      "parent_job": "AsurDev:g1_ruff",
+      "children": [
+        "f9d77fb2-5970-4cda-a8b4-d40c858fabe6"
+      ]
+    },
+    "... (+11 more)"
+  ]
+}

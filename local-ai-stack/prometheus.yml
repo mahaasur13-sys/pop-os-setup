@@ -1,0 +1,28 @@
+# prometheus.yml — metrics scrape config for agent-runtime stack
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  - job_name: "agent-runtime"
+    static_configs:
+      - targets: ["agent-runtime:8050"]
+    metrics_path: "/metrics"
+
+  # Circuit breaker metrics (exposed via /circuit-breakers JSON endpoint
+  # → redis_exporter or custom exporter in next iteration)
+  - job_name: "agent-runtime-circuit-breakers"
+    static_configs:
+      - targets: ["agent-runtime:8050"]
+    metrics_path: "/circuit-breakers"
+    scrape_interval: 30s
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:6379"]

@@ -1,0 +1,84 @@
+{
+  "schema_version": "6.0",
+  "repair_id": "REPAIR-20260410054527",
+  "repaired_at": "2026-04-10T05:45:27.389558+00:00",
+  "repos": {
+    "home-cluster-iac": {
+      "ir_hash": "d2747569de528031d44156949dd04f101d296056fa5b23692a5ecefdd47e15b7",
+      "toolchain": "37f97df2a2988474b5eff05c38377ef276524350fd962bbad524c24ac7bdb5a2",
+      "policy_hash": "289c10298b5455c2e40ccf361f2ec1799fcd9af40057f44f80718eefb13d695e",
+      "jobs": [
+        "g0_setup",
+        "g1_yamllint",
+        "g2_ansible_lint",
+        "g3_ruff",
+        "g4_terraform",
+        "g5_pytest",
+        "g6_shellcheck",
+        "g7_makefile"
+      ],
+      "edges": [
+        [
+          "g0_setup",
+          "g1_yamllint"
+        ],
+        [
+          "g0_setup",
+          "g2_ansible_lint"
+        ],
+        [
+          "g0_setup",
+          "g3_ruff"
+        ],
+        [
+          "g0_setup",
+          "g4_terraform"
+        ],
+        [
+          "g0_setup",
+          "g5_pytest"
+        ],
+        [
+          "g0_setup",
+          "g6_shellcheck"
+        ],
+        [
+          "g0_setup",
+          "g7_makefile"
+        ]
+      ],
+      "status": "REPAIRED"
+    },
+    "AsurDev": {
+      "ir_hash": "ae728b8ad57c340a6181a4847faaabbb4ea0351a1f4ba8174e8eadf9cff752fa",
+      "toolchain": "f9510b8802955c7863fc99505553371b9aafb52c595279530385c46fecbffd36",
+      "policy_hash": "3ec51661aa5b5af6e7ce85be712f7b95dae30133a1c001c8b3f0b88d3babeeb8",
+      "jobs": [
+        "g0_setup",
+        "g1_ruff",
+        "g2_black",
+        "g3_pytest"
+      ],
+      "edges": [
+        [
+          "g0_setup",
+          "g1_ruff"
+        ],
+        [
+          "g0_setup",
+          "g2_black"
+        ],
+        [
+          "g0_setup",
+          "g3_pytest"
+        ]
+      ],
+      "status": "REPAIRED"
+    }
+  },
+  "policy_hash_anchor": "8d9d2b9ed41a4e1d03d02ad5f8a4ef07cd9cf8064af9e3300874eb3a2ab03efe",
+  "toolchain_hash_base": "b326b13f28da0fe251cff6a7519f14342c6f6ed48ac2f0bc7372bc8df8aecbe7",
+  "ir_hash": "5c01180d20cfab5ad771825b072326b225845e6f018804d22a425b676fd2487a",
+  "projection_hash": "df8553fd0bacc6f9ed1527023e8ca2f4a9c7b713a035e27dc5b8f1781b3bb86d",
+  "consistency": "RESTORED"
+}

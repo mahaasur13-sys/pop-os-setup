@@ -1,0 +1,187 @@
+{
+  "repair_id": "REPAIR-20260410054527",
+  "drift_types": [
+    "EXECUTION_FAILURE"
+  ],
+  "affected_count": 14,
+  "policy_hash_anchor": "IMUTABLE",
+  "repair_mode": "MINIMAL_CAUSAL_PATCH",
+  "patches": [
+    {
+      "event_id": "f5b687d8-c13a-4659-9060-b8dfb2de5d49",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g0_setup",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "3660549c-265f-4e33-bdf1-84e7a89ac016",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g1_ruff",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "f9d77fb2-5970-4cda-a8b4-d40c858fabe6",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g2_black",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "c2204cc2-fc13-462c-941e-732d14de0464",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g3_pytest",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "58e81142-de0e-49c5-bd35-525430759d0c",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g0_setup",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "e132cf1a-f71c-49a2-888d-494f8a96291d",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g1_yamllint",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "43b7cb4d-47b9-4091-b91e-0efa09f4477d",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g2_ansible_lint",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "55ab1e63-83db-488f-a6c8-29334087b2c0",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g3_ruff",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "5f5f8b5d-0207-43db-8499-33375871bb73",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g4_terraform",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "921e7a8f-875a-45b3-894b-d4746917a6ff",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g5_pytest",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "3c1cc607-aea2-4783-bc35-9233d7fb66d1",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g6_shellcheck",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    },
+    {
+      "event_id": "febd4e42-580a-446e-b628-df5504ddb844",
+      "actions": [
+        {
+          "action": "RETRY_JOB",
+          "job": "g7_makefile",
+          "reason": "execution failure \u2014 isolate and retry"
+        },
+        {
+          "action": "ANNOTATE",
+          "reason": "add failure context to event metadata"
+        }
+      ]
+    }
+  ],
+  "constraints": {
+    "policy_hash_immutable": true,
+    "ir_hash_recomputed": true,
+    "render_hash_regenerated": false,
+    "orphan_events_forbidden": true,
+    "parent_chain_intact": true
+  },
+  "minimal_change_verified": false
+}

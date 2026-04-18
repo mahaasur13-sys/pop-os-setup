@@ -1,0 +1,35 @@
+{
+  "schema": "federation.v4",
+  "version": "4.0.0",
+  "federation_status": "PASS",
+  "federation_hash": "45cb124cace97e170f5a4b90e0e6dae432b980cd57f9275b1ec168c8b489882f",
+  "repos": 2,
+  "global_dag_edges": 10,
+  "global_job_count": 12,
+  "execution_order": [
+    "AsurDev:g0_setup",
+    "AsurDev:g1_ruff",
+    "AsurDev:g2_black",
+    "AsurDev:g3_pytest",
+    "home-cluster-iac:g0_setup",
+    "home-cluster-iac:g1_yamllint",
+    "home-cluster-iac:g2_ansible_lint",
+    "home-cluster-iac:g3_ruff",
+    "home-cluster-iac:g4_terraform",
+    "home-cluster-iac:g5_pytest",
+    "home-cluster-iac:g6_shellcheck",
+    "home-cluster-iac:g7_makefile"
+  ],
+  "consensus": "STRONG",
+  "mode": "GLOBAL_FAIL_CLOSED",
+  "rules": {
+    "F001_toolchain_consistency": "PASS",
+    "F002_dag_cycles": "PASS",
+    "F003_namespace_prefix": "PASS",
+    "F004_deterministic_ordering": "PASS",
+    "F005_ir_hash_present": "PASS",
+    "F006_schema_version": "PASS"
+  },
+  "toolchain_consensus": "37f97df2a2988474b5eff05c38377ef276524350fd962bbad524c24ac7bdb5a2",
+  "timestamp": "2026-04-10T05:30:56.854132+00:00"
+}

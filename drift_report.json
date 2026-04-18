@@ -1,0 +1,117 @@
+{
+  "status": "DRIFT",
+  "drifts": [
+    {
+      "type": "D5_PASS",
+      "event": "f5b687d8-c13a-4659-9060-b8dfb2de5d49",
+      "repo": "AsurDev",
+      "job": "g0_setup",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "3660549c-265f-4e33-bdf1-84e7a89ac016",
+      "repo": "AsurDev",
+      "job": "g1_ruff",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "f9d77fb2-5970-4cda-a8b4-d40c858fabe6",
+      "repo": "AsurDev",
+      "job": "g2_black",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "c2204cc2-fc13-462c-941e-732d14de0464",
+      "repo": "AsurDev",
+      "job": "g3_pytest",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "58e81142-de0e-49c5-bd35-525430759d0c",
+      "repo": "home-cluster-iac",
+      "job": "g0_setup",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "e132cf1a-f71c-49a2-888d-494f8a96291d",
+      "repo": "home-cluster-iac",
+      "job": "g1_yamllint",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "43b7cb4d-47b9-4091-b91e-0efa09f4477d",
+      "repo": "home-cluster-iac",
+      "job": "g2_ansible_lint",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "55ab1e63-83db-488f-a6c8-29334087b2c0",
+      "repo": "home-cluster-iac",
+      "job": "g3_ruff",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "5f5f8b5d-0207-43db-8499-33375871bb73",
+      "repo": "home-cluster-iac",
+      "job": "g4_terraform",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "921e7a8f-875a-45b3-894b-d4746917a6ff",
+      "repo": "home-cluster-iac",
+      "job": "g5_pytest",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "3c1cc607-aea2-4783-bc35-9233d7fb66d1",
+      "repo": "home-cluster-iac",
+      "job": "g6_shellcheck",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    },
+    {
+      "type": "D5_PASS",
+      "event": "febd4e42-580a-446e-b628-df5504ddb844",
+      "repo": "home-cluster-iac",
+      "job": "g7_makefile",
+      "timestamp": "2026-04-10T05:00:00Z",
+      "caused_by": []
+    }
+  ],
+  "summary": {
+    "D1_policy_changes": 0,
+    "D2_toolchain_changes": 0,
+    "D3_orphan_events": 0,
+    "D4_render_drifts": 0,
+    "D5_failures": 12,
+    "total_drifts": 12
+  },
+  "policy_versions": [
+    "federation_root"
+  ],
+  "toolchain_versions": [
+    "37f97df2a2988474b5eff05c38377ef276524350fd962bbad524c24ac7bdb5a2"
+  ],
+  "render_versions": [],
+  "status_versions": []
+}

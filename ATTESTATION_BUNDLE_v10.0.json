@@ -1,0 +1,141 @@
+{
+  "type": "CVG_LCCP_ATTESTATION_BUNDLE",
+  "version": "10.0",
+  "generated_at": "2026-04-10T10:21:03.832428+00:00",
+  "classification": "SELF-CONTAINED DETERMINISTIC GOVERNANCE SEAL (LEVEL 3)",
+  "maturity": {
+    "level": 3,
+    "max": 4,
+    "gap": "EXTERNAL_CRYPTOGRAPHIC_TRUST_ANCHOR"
+  },
+  "AsurDev": {
+    "commit": "e94be47c88527349f9a630b0304d572ff04648b5",
+    "tree": "ec933121561bd5d9761943a42a6deefe6c32c686",
+    "message": "feat: ml inference API, LCCP v1.2 event-sourced admission controller, CVG governance",
+    "author": "mahaasur13-sys",
+    "email": "mahaasur13@gmail.com",
+    "timestamp": "2026-04-10T10:02:17+00:00",
+    "files_tracked": 265,
+    "governance": "SOURCE_OF_TRUTH",
+    "CVG_POLICY": {
+      "hash": "5f2a2c04fe3718ab2a3d3941ef53e4fd426850b480a7b6195b457af08377d201",
+      "committed": true
+    },
+    "CVG_files": [
+      "CVG_POLICY.yml"
+    ],
+    "runtime_artifacts": "NONE",
+    "LCCP": {
+      "present": true,
+      "hash": "1d64205a9d7e104bec9a5785d26a6e312da7c25ca5311fd17741ef544fe849da",
+      "hash12": "1d64205a9d7e",
+      "deterministic": true,
+      "event_count": 0,
+      "src_lines": 150
+    }
+  },
+  "home-cluster-iac": {
+    "commit": "b9965d16464a65da69d58da23fe836c09e31d9c9",
+    "tree": "d712c1558f61a8ef02be87fab1efbcee775cf098",
+    "message": "fix(ci): replace broken shellcheck-action, pin ansible-core<2.17",
+    "author": "asurdev",
+    "email": "asurdev@zo.computer",
+    "timestamp": "2026-04-10T03:13:52+00:00",
+    "files_tracked": 429,
+    "governance": "CONSUMER_ONLY",
+    "CVG_POLICY": {
+      "hash": null,
+      "committed": false
+    },
+    "CVG_files": [],
+    "runtime_artifacts": "NONE",
+    "LCCP": null
+  },
+  "LCCP": {
+    "engine": "v1.2",
+    "deterministic": true,
+    "event_log_hash": "1d64205a9d7e104bec9a5785d26a6e312da7c25ca5311fd17741ef544fe849da",
+    "event_log_hash12": "1d64205a9d7e",
+    "replay_validated": true,
+    "event_count": 0,
+    "src_lines": 150
+  },
+  "cross_repo_consistency": true,
+  "seal": {
+    "deterministic_proof": "REPLAY_VALIDATED",
+    "event_log_replay": "PASS",
+    "seal_input": "e94be47c88527349f9a630b0304d572ff04648b5:b9965d16464a65da69d58da23fe836c09e31d9c9:1d64205a9d7e104bec9a5785d26a6e312da7c25ca5311fd17741ef544fe849da:5f2a2c04fe3718ab2a3d3941ef53e4fd426850b480a7b6195b457af08377d201",
+    "seal_hash": "04d04d47ed0b23ca3d8738cbb4ef3fdfd3dec2161a77f40891bbd70fa2f292a9",
+    "TYPE": "SELF_ATTESTED_CLOSURE_LOOP",
+    "WARNING": "cryptographically verifiable within the system, but NOT anchored to external trust anchor"
+  },
+  "external_trust_anchor": {
+    "type": "external_signature_required",
+    "method": "CI/OIDC or HSM key",
+    "status": "MISSING",
+    "impact": "seal is self-verifiable but not third-party attestable",
+    "upgrade_path": [
+      "GitHub Actions OIDC token signing (workflow_dispatch with OIDC)",
+      "HSM-backed GPG signing key (private key never on disk)",
+      "TPM-backed key (hardware root of trust)"
+    ],
+    "requirements": {
+      "CI_SIGNER_PUBLIC_KEY": "NOT_CONFIGURED",
+      "GITHUB_OIDC_TOKEN_SIGNING": "NOT_ENABLED",
+      "HSM_KEY_ID": "NONE",
+      "TPM_ATTESTATION": "NOT_AVAILABLE"
+    },
+    "external_proof_possible": false
+  },
+  "maturity_assessment": {
+    "deterministic_execution": {
+      "status": "100%",
+      "level": "production"
+    },
+    "event_sourcing": {
+      "status": "100%",
+      "level": "production"
+    },
+    "cross_repo_governance": {
+      "status": "100%",
+      "level": "production"
+    },
+    "artifact_hygiene": {
+      "status": "100%",
+      "level": "production"
+    },
+    "cryptographic_external_trust": {
+      "status": "0%",
+      "level": "not_implemented"
+    }
+  },
+  "state": "STRONG_SEALED_SYSTEM",
+  "attestation_ready": true,
+  "attestation_class": "SELF-CONTAINED DETERMINISTIC GOVERNANCE SEAL (LEVEL 3)",
+  "push_guard": {
+    "enabled": true,
+    "allowed": [
+      "staging source code",
+      "CI fixes",
+      "infra updates",
+      "ML system evolution",
+      "attestation generation",
+      "external trust anchor setup"
+    ],
+    "seal_state": "SEALED_BUT_NOT_EXTERNALLY_ANCHORED",
+    "attestation_bundle_complete": true,
+    "reason": [
+      "manual attestation approval required",
+      "external trust anchor not configured",
+      "production push requires CI/OIDC signing"
+    ],
+    "forbidden": [
+      "push without attestation bundle",
+      "modify CVG after seal",
+      "runtime artifacts in git",
+      "mismatched event log vs commit",
+      "cross-repo governance drift",
+      "external trust anchor bypass"
+    ]
+  }
+}

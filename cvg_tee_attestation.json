@@ -1,0 +1,57 @@
+{
+  "schema": "cvg.tee.attestation.v7",
+  "version": "7.0.0",
+  "status": "ATTESTED",
+  "trusted": true,
+  "platform": "intel_sgx_simulated_v7",
+  "attestation_id": "f5f88228-7e65-471f-a0c0-e9024bf8d86f",
+  "execution_hash": "0265aba4f1688f38446f00145816ba609540d42296673fbb6e6d715f483e446f",
+  "attestation_hash": "8ba6a13ef46650aa44cd5a63a9694ed08658b8ebb0e970cb68b767fbb3496a90",
+  "policy_bound": {
+    "hci": "289c10298b5455c2e40ccf361f2ec1799fcd9af40057f44f80718eefb13d695e",
+    "asur": "3ec51661aa5b5af6e7ce85be712f7b95dae30133a1c001c8b3f0b88d3babeeb8",
+    "hci_match": true,
+    "asur_match": true
+  },
+  "ir_bound": {
+    "hci": "d2747569de528031d44156949dd04f101d296056fa5b23692a5ecefdd47e15b7",
+    "asur": "ae728b8ad57c340a6181a4847faaabbb4ea0351a1f4ba8174e8eadf9cff752fa",
+    "hci_match": true,
+    "asur_match": true
+  },
+  "render_bound": {
+    "hci": "016e25444361a6c1f50f0530c1f12aec76e29cf123c425f2c9fa9f1915d2e2af",
+    "asur": "f9f90cf3d632d21b88a392a93b0bb77892c4df96979031effe74a0dbf259f708",
+    "hci_match": true,
+    "asur_match": true
+  },
+  "hardware_attestation": {
+    "platform": "intel_sgx_simulated_v7",
+    "signature_valid": true,
+    "public_key_hash": "377cf78baa767507516843ec2d93c495b87fcddedd239b60d0151ff6f0f77b47",
+    "replay_protected": true,
+    "attestation_chain": [
+      {
+        "cert": "Intel_SGX_RootCA_SHA256",
+        "fingerprint": "ba5086305a33c293fb74565e8051cc06bb4c828bbc2c120c061ff034d18830da",
+        "issuer": "Intel Corporation"
+      },
+      {
+        "cert": "CVG_TEE_PlatformCA_intel_sgx_simulated_v7",
+        "fingerprint": "a41a8e87969c06c7429c461ad8b62d3c870d2515e2283afb1d8301e0498840f1",
+        "issuer": "CVG TEE Federation CA"
+      }
+    ]
+  },
+  "replay_protection": {
+    "nonce": "ed2be735-723b-430c-80ab-1acb41e6f6c5",
+    "unique": true
+  },
+  "v6_self_heal_bound": {
+    "projection_hash": "df8553fd0bacc6f9ed1527023e8ca2f4a9c7b713a035e27dc5b8f1781b3bb86d",
+    "repair_id": "REPAIR-20260410054527",
+    "consistency": "RESTORED",
+    "status": "BOUND"
+  },
+  "timestamp": "2026-04-10T05:54:58.489893+00:00"
+}

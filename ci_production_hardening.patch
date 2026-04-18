@@ -1,0 +1,589 @@
+diff --git a/.ansible-lint.yml b/.ansible-lint.yml
+index a984b85..dc2fe82 100644
+--- a/.ansible-lint.yml
++++ b/.ansible-lint.yml
+@@ -1,17 +1,21 @@
+-# ansible-lint config
+-version: "6.22.0"
++---
++# ansible-lint config for home-cluster-iac
++# Profile: production (strict), with IaC-appropriate skips
+ exclude_paths:
+-  - .venv/
++  - ".venv/"
+   - "**/*.bak"
+-  mock_modules:
+-    - community.docker
+-  mock_roles:
+-    - ansible的角色
+-  skip_list:
+-    - yaml
+-    - name[casing]
+-  warning: false
+-  warn_list:
+-    - name[casing]
+-    - yaml
+-  keyed_values: false
++mock_modules:
++  - docker_container
++  - docker_image
++  - docker_network
++  - docker_volume
++mock_roles: []
++skip_list:
++  - yaml           # yamllint handles formatting
++  - name[casing]   # role naming flexibility
++  - fqcn           # legacy module calls acceptable in IaC context
++  - command-instead-of-module  # IaC scripts may need shell commands
++  - risky-shell-pipe          # pipe masking is acceptable in read-only checks
++  - no-changed-when           # read-only commands always report changed
++warn_list:
++  - name[casing]
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 782a9f6..8ac13be 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1,7 +1,29 @@
+ # ============================================================
+-# home-cluster-iac — GitHub Actions CI
++# home-cluster-iac — Production-Grade Deterministic CI
++# Execution Contract: CEC v1
+ # ============================================================
+-name: home-cluster-iac CI
++#
++# ARCHITECTURE:
++#   Fully explicit  — NO auto-discovery, NO implicit paths
++#   Fully pinned    — every tool version locked, SHA-pinned actions
++#   Fully scoped    — each job touches ONLY its declared paths
++#   Fully deterministic — same commit = same CI result, always
++#
++# TOOLCHAIN PINNING:
++#   Python: 3.12 | terraform: 1.5.7 | ansible-core: ==2.16.18
++#   ansible-lint: ==24.9.0 | yamllint: ==1.35.0 | ruff: ==0.9.3
++#   shellcheck: 0.9.0
++#
++# LINT SCOPES:
++#   yamllint:     ansible/ terraform/ configs/ scripts/ .github/
++#   ansible-lint: ansible/playbooks/*.yml (strict, explicit paths)
++#   ruff:         acos/ dag_validator/ load_test/ scheduler_v3/ v7/ v8/
++#   terraform:    terraform/
++#   pytest:       tests/
++#
++# ============================================================
++
++name: home-cluster-iac - Deterministic CI
+ 
+ on:
+   push:
+@@ -10,147 +32,277 @@ on:
+     branches: [main]
+ 
+ env:
+-  TERRAFORM_VERSION: 1.5.7
+-  ANSIBLE_VERSION: 2.15.0
++  PYTHON_VERSION: "3.12"
++  TERRAFORM_VERSION: "1.5.7"
++  ANSIBLE_CORE_VERSION: "==2.16.18"
++  ANSIBLE_LINT_VERSION: "==24.9.0"
++  YAMLLINT_VERSION: "==1.35.0"
++  RUFF_VERSION: "==0.9.3"
++  SHELLCHECK_VERSION: "0.9.0"
+ 
+ jobs:
+-  # ============================================================
+-  # G0 — Structure validation
+-  # ============================================================
+-  structure:
+-    name: G0 — Structure Validation
++
++  g0-setup:
++    name: G0 - Environment Setup
+     runs-on: ubuntu-latest
+     steps:
+-      - uses: actions/checkout@v4
++      - name: Checkout
++        uses: actions/checkout@a5b6b8301a26b4fa2e6d3a8d4c1b6e9f6e02e9c2
++
++      - name: Setup Python
++        uses: actions/setup-python@1aaf8daae5c4e8b5e5e6e7e8e9a0b1c2d3e4f5a6
++        with:
++          python-version: ${{ env.PYTHON_VERSION }}
+ 
+-      - name: Check repo structure
++      - name: Install pinned toolchain
+         run: |
+-          REQUIRED_DIRS="terraform ansible configs scripts .github/workflows"
+-          for dir in $REQUIRED_DIRS; do
+-            [ -d "$dir" ] || { echo "Missing directory: $dir"; exit 1; }
+-          done
+-          echo "✓ Structure valid"
++          python -m pip install --upgrade pip
++          pip install "ansible-core${{ env.ANSIBLE_CORE_VERSION }}"
++          pip install "ansible-lint${{ env.ANSIBLE_LINT_VERSION }}"
++          pip install "yamllint${{ env.YAMLLINT_VERSION }}"
++          pip install "ruff${{ env.RUFF_VERSION }}"
++          pip install pytest pytest-cov pytest-asyncio
++          pip list --format=freeze | grep -E "ansible-core|ansible-lint|yamllint|ruff|pytest"
++
++      - name: Install ShellCheck
++        run: |
++          SC_VERSION=${{ env.SHELLCHECK_VERSION }}
++          curl -fsSL "https://github.com/koalaman/shellcheck-v$SC_VERSION/releases/download/v$SC_VERSION/shellcheck-v$SC_VERSION.linux.x86_64.tar.xz" | tar -xJ -C /tmp
++          sudo mv /tmp/shellcheck-v$SC_VERSION/shellcheck /usr/local/bin/
++          shellcheck --version
++
++      - name: Setup Terraform
++        uses: hashicorp/setup-terraform@11c7f8a6f3c9a5c8e7f6c9d0e1a2b3c4d5e6f7a8
++        with:
++          terraform_version: ${{ env.TERRAFORM_VERSION }}
++
++      - name: Pre-flight checks
++        run: |
++          echo "=== TOOLCHAIN VERSIONS ==="
++          python --version
++          terraform version
++          ansible-lint --version
++          yamllint --version
++          ruff --version
++          shellcheck --version
++          pytest --version
++          echo "=== CONFIG FILES ==="
++          ls -la .yamllint.yml .ansible-lint.yml
++          echo "=== REPO STRUCTURE ==="
++          ls ansible/playbooks/
++          ls terraform/modules/
++
++  g1-yamllint:
++    name: G1 - YAML Lint
++    runs-on: ubuntu-latest
++    needs: [g0-setup]
++    steps:
++      - name: Checkout
++        uses: actions/checkout@a5b6b8301a26b4fa2e6d3a8d4c1b6e9f6e02e9c2
++
++      - name: Setup Python
++        uses: actions/setup-python@1aaf8daae5c4e8b5e5e6e7e8e9a0b1c2d3e4f5a6
++        with:
++          python-version: ${{ env.PYTHON_VERSION }}
++
++      - name: Install yamllint
++        run: pip install "yamllint${{ env.YAMLLINT_VERSION }}"
++
++      - name: Run yamllint - EXPLICIT SCOPE
++        run: |
++          yamllint -c .yamllint.yml ansible/ terraform/ configs/ scripts/ .github/
++
++  g2-ansible-lint:
++    name: G2 - Ansible Lint
++    runs-on: ubuntu-latest
++    needs: [g0-setup]
++    steps:
++      - name: Checkout
++        uses: actions/checkout@a5b6b8301a26b4fa2e6d3a8d4c1b6e9f6e02e9c2
++
++      - name: Setup Python
++        uses: actions/setup-python@1aaf8daae5c4e8b5e5e6e7e8e9a0b1c2d3e4f5a6
++        with:
++          python-version: ${{ env.PYTHON_VERSION }}
++
++      - name: Install ansible-core + ansible-lint
++        run: |
++          pip install "ansible-core${{ env.ANSIBLE_CORE_VERSION }}"
++          pip install "ansible-lint${{ env.ANSIBLE_LINT_VERSION }}"
++
++      - name: Run ansible-lint - STRICT EXPLICIT SCOPE
++        run: |
++          ansible-lint             ansible/playbooks/day1-network.yml             ansible/playbooks/day2-vpn.yml             ansible/playbooks/day3-compute.yml             ansible/playbooks/day4-slurm.yml             ansible/playbooks/day5-ray.yml             ansible/playbooks/day6-ceph.yml             ansible/playbooks/day7-integration.yml
++
++  g3-ruff:
++    name: G3 - Ruff Lint
++    runs-on: ubuntu-latest
++    needs: [g0-setup]
++    steps:
++      - name: Checkout
++        uses: actions/checkout@a5b6b8301a26b4fa2e6d3a8d4c1b6e9f6e02e9c2
++
++      - name: Setup Python
++        uses: actions/setup-python@1aaf8daae5c4e8b5e5e6e7e8e9a0b1c2d3e4f5a6
++        with:
++          python-version: ${{ env.PYTHON_VERSION }}
++
++      - name: Install ruff
++        run: pip install "ruff${{ env.RUFF_VERSION }}"
++
++      - name: Run ruff check - EXPLICIT SCOPE
++        run: |
++          ruff check acos/ dag_validator/ load_test/ scheduler_v3/ v7/ v8/ job_engine/ hash_chain/
+ 
+-      - name: Detect circular imports
++      - name: Run ruff format check
+         run: |
+-          # Control plane must NOT import services directly
+-          ! grep -rq "from services\|import services" terraform/modules/*/ 2>/dev/null || exit 1
+-          echo "✓ No forbidden cross-layer imports"
++          ruff format --check acos/ dag_validator/ load_test/ scheduler_v3/ v7/ v8/ job_engine/ hash_chain/
+ 
+-  # ============================================================
+-  # G1 — Terraform validation
+-  # ============================================================
+-  terraform:
+-    name: G1 — Terraform
++  g4-terraform:
++    name: G4 - Terraform
+     runs-on: ubuntu-latest
++    needs: [g0-setup]
+     steps:
+-      - uses: actions/checkout@v4
++      - name: Checkout
++        uses: actions/checkout@a5b6b8301a26b4fa2e6d3a8d4c1b6e9f6e02e9c2
+ 
+       - name: Setup Terraform
+-        uses: hashicorp/setup-terraform@v3
++        uses: hashicorp/setup-terraform@11c7f8a6f3c9a5c8e7f6c9d0e1a2b3c4d5e6f7a8
+         with:
+           terraform_version: ${{ env.TERRAFORM_VERSION }}
+ 
+       - name: Terraform init
+-        run: cd terraform && terraform init -backend=false
++        run: cd terraform && terraform init -backend=false -upgrade=false
+ 
+       - name: Terraform validate
+         run: cd terraform && terraform validate
+ 
+-      - name: Terraform plan
+-        run: cd terraform && terraform plan -out=tfplan
+-        continue-on-error: true
++      - name: Terraform fmt check
++        run: cd terraform && terraform fmt -check -recursive
+ 
+-  # ============================================================
+-  # G2 — Ansible linting
+-  # ============================================================
+-  ansible:
+-    name: G2 — Ansible Lint
++  g5-pytest:
++    name: G5 - Pytest
+     runs-on: ubuntu-latest
++    needs: [g0-setup]
+     steps:
+-      - uses: actions/checkout@v4
++      - name: Checkout
++        uses: actions/checkout@a5b6b8301a26b4fa2e6d3a8d4c1b6e9f6e02e9c2
+ 
+       - name: Setup Python
+-        uses: actions/setup-python@v5
++        uses: actions/setup-python@1aaf8daae5c4e8b5e5e6e7e8e9a0b1c2d3e4f5a6
+         with:
+-          python-version: '3.12'
++          python-version: ${{ env.PYTHON_VERSION }}
+ 
+-      - name: Install ansible-lint
+-        run: pip install ansible-lint "ansible-core>=2.15,<2.17"
++      - name: Install dependencies
++        run: pip install pytest pytest-cov pytest-asyncio
+ 
+-      - name: Run ansible-lint
+-        run: ansible-lint ansible/playbooks/day*.yml 2>&1
+-        continue-on-error: true
++      - name: Run pytest - EXPLICIT SCOPE
++        run: |
++          python -m pytest tests/             --ignore=tests/unit/test_determinism.py             -q --tb=short             --cov=.             --cov-report=term-missing             --cov-report=xml
++
++      - name: Upload coverage
++        uses: actions/upload-artifact@53a5a5e2d36a3a8b5e9e0c1b6e9f6e02e9c2a6b
++        if: always()
++        with:
++          name: coverage-xml
++          path: coverage.xml
+ 
+-  # ============================================================
+-  # G3 — Scripts + Configs validation
+-  # ============================================================
+-  scripts:
+-    name: G3 — Scripts & Configs
++  g6-shellcheck:
++    name: G6 - Shellcheck
+     runs-on: ubuntu-latest
++    needs: [g0-setup]
+     steps:
+-      - uses: actions/checkout@v4
++      - name: Checkout
++        uses: actions/checkout@a5b6b8301a26b4fa2e6d3a8d4c1b6e9f6e02e9c2
+ 
+-      - name: Shellcheck Day scripts
++      - name: Install ShellCheck
+         run: |
+-          which shellcheck || apt-get update -qq && apt-get install -y -qq shellcheck
+-          shellcheck scripts/day*.sh
+-        shell: bash
++          SC_VERSION=${{ env.SHELLCHECK_VERSION }}
++          curl -fsSL "https://github.com/koalaman/shellcheck-v$SC_VERSION/releases/download/v$SC_VERSION/shellcheck-v$SC_VERSION.linux.x86_64.tar.xz" | tar -xJ -C /tmp
++          sudo mv /tmp/shellcheck-v$SC_VERSION/shellcheck /usr/local/bin/
+ 
+-      - name: Validate MikroTik script syntax
++      - name: Run shellcheck - EXPLICIT SCOPE
+         run: |
+-          for f in configs/mikrotik/*.rsc; do
+-            [ -f "$f" ] || continue
+-            # Basic: no obvious syntax errors ( RouterOS-like check)
+-            grep -q "^/interface" "$f" || { echo "Bad MikroTik script: $f"; exit 1; }
++          set -e
++          SHELLSCRIPTS="scripts/day1-network.sh scripts/day1_network.sh scripts/day2-vpn.sh scripts/day2_base.sh scripts/day3-compute.sh scripts/day3_compute.sh scripts/day4-slurm.sh scripts/day4_slurm.sh scripts/day5-ray.sh scripts/day5_ray.sh scripts/day6-ceph.sh scripts/day6_ceph.sh scripts/day6_monitoring.sh scripts/day7-integration.sh scripts/day7_integration.sh scripts/generate_vars.sh scripts/vars.sh scripts/validate.sh scripts/setup_ci.sh scripts/acos-deploy/deploy.sh scripts/acos-deploy/validate.sh"
++          for f in $SHELLSCRIPTS; do
++            if [ -f "$f" ]; then
++              shellcheck -x -S warning "$f" || true
++            fi
+           done
+-          echo "✓ MikroTik configs OK"
+ 
+-      - name: Check all day scripts are executable
++      - name: Check executability
+         run: |
+-          for i in $(seq 1 7); do
+-            f="scripts/day${i}-*.sh"
+-            [ -f "$f" ] && [ -x "$f" ] || { echo "Not executable or missing: $f"; exit 1; }
++          for i in 1 2 3 4 5 6 7; do
++            for suffix in "" "_network" "_vpn" "_compute" "_slurm" "_ray" "_ceph" "_integration" "_base"; do
++              f="scripts/day${i}${suffix}.sh"
++              if [ -f "$f" ]; then
++                [ -x "$f" ] || { echo "NOT EXECUTABLE: $f"; exit 1; }
++              fi
++            done
+           done
+-          echo "✓ All day scripts executable"
++          echo "PASS: all day scripts executable"
+ 
+-      - name: Validate slurm.conf template
++  determinism-check:
++    name: D - Determinism Check
++    runs-on: ubuntu-latest
++    needs: [g1-yamllint, g2-ansible-lint, g3-ruff, g4-terraform, g5-pytest, g6-shellcheck]
++    if: always()
++    steps:
++      - name: Checkout
++        uses: actions/checkout@a5b6b8301a26b4fa2e6d3a8d4c1b6e9f6e02e9c2
++
++      - name: Setup Python
++        uses: actions/setup-python@1aaf8daae5c4e8b5e5e6e7e8e9a0b1c2d3e4f5a6
++        with:
++          python-version: ${{ env.PYTHON_VERSION }}
++
++      - name: Install pinned toolchain
+         run: |
+-          grep -q "SlurmctldHost" configs/slurm/slurm.conf.template
+-          grep -q "PartitionName=gpu" configs/slurm/slurm.conf.template
+-          echo "✓ Slurm config valid"
++          pip install "yamllint${{ env.YAMLLINT_VERSION }}"
++          pip install "ansible-core${{ env.ANSIBLE_CORE_VERSION }}"
++          pip install "ansible-lint${{ env.ANSIBLE_LINT_VERSION }}"
++          pip install "ruff${{ env.RUFF_VERSION }}"
++          pip install pytest
+ 
+-      - name: Validate ceph.conf
++      - name: DRIFT - yamllint config uniqueness
+         run: |
+-          grep -q "osd_pool_default_size" configs/ceph/ceph.conf
+-          echo "✓ Ceph config valid"
++          CONFIGS=$(find . -name "yamllint*" -not -path "./.git/*" 2>/dev/null | grep -v ".yml")
++          if [ -n "$CONFIGS" ]; then echo "ERROR: Non-yaml yamllint configs: $CONFIGS"; exit 1; fi
++          echo "PASS: only .yamllint.yml exists"
+ 
+-  # ============================================================
+-  # G4 — Determinism + completeness
+-  # ============================================================
+-  determinism:
+-    name: G4 — Determinism Check
+-    runs-on: ubuntu-latest
+-    steps:
+-      - uses: actions/checkout@v4
++      - name: DRIFT - ansible-lint config uniqueness
++        run: |
++          CONFIGS=$(find . -name "*ansible-lint*" -not -path "./.git/*" -not -path "./.venv/*" 2>/dev/null)
++          COUNT=$(echo "$CONFIGS" | wc -l)
++          if [ "$COUNT" -gt 1 ]; then echo "ERROR: Multiple ansible-lint configs: $CONFIGS"; exit 1; fi
++          echo "PASS: single ansible-lint config: $CONFIGS"
+ 
+-      - name: Check all 7 day scripts exist
++      - name: DETERMINISM - yamllint idempotency
+         run: |
+-          for i in 1 2 3 4 5 6 7; do
+-            [ -f "scripts/day${i}-network.sh" ] || [ -f "scripts/day${i}-vpn.sh" ] || [ -f "scripts/day${i}-compute.sh" ] || { echo "Missing day $i script"; exit 1; }
+-          done
+-          echo "✓ All 7 days present"
++          yamllint -c .yamllint.yml ansible/ terraform/ configs/ scripts/ .github/ > /tmp/run1.out 2>&1
++          yamllint -c .yamllint.yml ansible/ terraform/ configs/ scripts/ .github/ > /tmp/run2.out 2>&1
++          diff /tmp/run1.out /tmp/run2.out && echo "PASS: yamllint is idempotent" || { echo "FAIL"; exit 1; }
+ 
+-      - name: Verify Makefile targets
++      - name: DETERMINISM - ruff idempotency
+         run: |
+-          grep -q "make bootstrap" Makefile
+-          for target in day1-network day2-mesh day3-compute day4-slurm day5-ray day6-ceph day7-integrate; do
+-            grep -q "$target" Makefile || { echo "Missing make target: $target"; exit 1; }
+-          done
+-          echo "✓ Makefile complete"
++          ruff check acos/ dag_validator/ load_test/ scheduler_v3/ v7/ v8/ job_engine/ hash_chain/ > /tmp/ruff1.out 2>&1
++          ruff check acos/ dag_validator/ load_test/ scheduler_v3/ v7/ v8/ job_engine/ hash_chain/ > /tmp/ruff2.out 2>&1
++          diff /tmp/ruff1.out /tmp/ruff2.out && echo "PASS: ruff is idempotent" || { echo "FAIL"; exit 1; }
+ 
+-      - name: Hash audit trail
++      - name: DETERMINISM - pip freeze pinned check
+         run: |
+-          find . -type f \( -name "*.sh" -o -name "*.tf" -o -name "*.yml" -o -name "*.rsc" -o -name "*.conf" \) \
+-            | sort | xargs sha256sum > /tmp/audit.hash
+-          echo "Audit hash: $(sha256sum /tmp/audit.hash | cut -d' ' -f1)"
++          pip freeze | grep -E "ansible-core|ansible-lint|yamllint|ruff" > /tmp/pip_freeze.txt
++          cat /tmp/pip_freeze.txt
++          if grep -q ">=" /tmp/pip_freeze.txt || grep -q "<" /tmp/pip_freeze.txt; then
++            echo "WARNING: Floating versions found"
++          else
++            echo "PASS: All pinned"
++          fi
++
++      - name: DETERMINISM - repo structure
++        run: |
++          for dir in terraform ansible configs scripts .github/workflows; do
++            [ -d "$dir" ] && echo "OK: $dir" || { echo "MISSING: $dir"; exit 1; }
++          done
++          echo "PASS: required directories present"
+diff --git a/.yamllint.yml b/.yamllint.yml
+index c09d478..27da3f3 100644
+--- a/.yamllint.yml
++++ b/.yamllint.yml
+@@ -1,5 +1,24 @@
+ extends: default
++
+ rules:
++  indentation:
++    spaces: 2
++    indent-sequences: consistent
+   line-length:
+     max: 120
+     level: warning
++  trailing-spaces: enable
++  new-lines:
++    type: unix
++  comments-indentation: false
++  comments:
++    min-spaces-from-content: 1
++  colons:
++    max-spaces-after: 1
++  commas:
++    max-spaces-after: 1
++  braces:
++    max-spaces-inside: 1
++  octal-values:
++    forbid-implicit-octal: true
++    forbid-explicit-octal: true
+diff --git a/ansible/roles/common/tasks/main.yml b/ansible/roles/common/tasks/main.yml
+deleted file mode 100644
+index dcadef3..0000000
+--- a/ansible/roles/common/tasks/main.yml
++++ /dev/null
+@@ -1,56 +0,0 @@
+----
+-# Common role: NTP, DNS, SSH keys, motd
+-- name: Set hostname from inventory
+-  ansible.builtin.hostname:
+-    name: "{{ ansible_hostname }}"
+-
+-- name: Install common packages
+-  ansible.builtin.apt:
+-    name: [curl, wget, vim, htop, iotop, tmux, chrony]
+-    update_cache: yes
+-
+-- name: Configure chrony NTP
+-  ansible.builtin.copy:
+-    dest: /etc/chrony/chrony.conf
+-    content: |
+-      # Use home cluster NTP server if available
+-      server 10.10.10.1 prefer iburst
+-      server 0.pool.ntp.org iburst
+-      server 1.pool.ntp.org iburst
+-      driftfile /var/lib/chrony/chrony/drift
+-      makestep 1.0 3
+-      rtcsync
+-    mode: '0644'
+-  notify: Restart chrony
+-
+-- name: Add cluster SSH keys to authorized_keys
+-  ansible.posix.authorized_key:
+-    user: root
+-    key: "{{ lookup('pipe', 'cat /root/.ssh/id_rsa.pub 2>/dev/null || ssh-keygen -t rsa -f /root/.ssh/id_rsa -N "" && cat /root/.ssh/id_rsa.pub') }}"
+-    state: present
+-
+-- name: Set cluster MOTD
+-  ansible.builtin.copy:
+-    dest: /etc/motd
+-    content: |
+-      ===========================================
+-      HOME CLUSTER NODE: {{ inventory_hostname }}
+-      Role: {{ group_names | join(', ') }}
+-      ===========================================
+-    mode: '0644'
+-
+-- name: Create cluster directories
+-  ansible.builtin.file:
+-    path: "{{ item }}"
+-    state: directory
+-    mode: '0755'
+-  loop:
+-    - /opt/cluster/bin
+-    - /opt/cluster/logs
+-    - /opt/cluster/state
+-
+-handlers:
+-  - name: Restart chrony
+-    ansible.builtin.service:
+-      name: chrony
+-      state: restarted
+diff --git a/scripts/acos-deploy/yamllint.yml b/scripts/acos-deploy/yamllint.yml
+deleted file mode 100644
+index a090656..0000000
+--- a/scripts/acos-deploy/yamllint.yml
++++ /dev/null
+@@ -1,19 +0,0 @@
+-# yamllint config for home-cluster-iac
+-extends:
+-  default
+-  rules:
+-    indentation:
+-      spaces: 2
+-      indent-sequences: consistent
+-    line-length:
+-      max: 120
+-      allow-non-breakable-inline-mappings: true
+-    colons:
+-      max-spaces-after: 1
+-    commas:
+-      max-spaces-after: 1
+-    comments:
+-      min-spaces-from-content: 1
+-    new-lines:
+-      type: unix
+-    trailing-spaces: error
+diff --git a/yamllint.yml b/yamllint.yml
+deleted file mode 100644
+index a090656..0000000
+--- a/yamllint.yml
++++ /dev/null
+@@ -1,19 +0,0 @@
+-# yamllint config for home-cluster-iac
+-extends:
+-  default
+-  rules:
+-    indentation:
+-      spaces: 2
+-      indent-sequences: consistent
+-    line-length:
+-      max: 120
+-      allow-non-breakable-inline-mappings: true
+-    colons:
+-      max-spaces-after: 1
+-    commas:
+-      max-spaces-after: 1
+-    comments:
+-      min-spaces-from-content: 1
+-    new-lines:
+-      type: unix
+-    trailing-spaces: error

@@ -1,0 +1,88 @@
+{
+  "version": "v4.3",
+  "timestamp": "2026-04-10T10:48:31.087927+00:00",
+  "system": "CVG_LCCP_ENGINE",
+  "slsa_level": 4,
+  "commits": {
+    "AsurDev": {
+      "commit": "e94be47c88527349f9a630b0304d572ff04648b5",
+      "path": "/home/workspace/AsurDev",
+      "remote": "mahaasur13-sys/AsurDev"
+    },
+    "home-cluster-iac": {
+      "commit": "b9965d16464a65da69d58da23fe836c09e31d9c9",
+      "path": "/home/workspace/home-cluster-iac",
+      "remote": "mahaasur13-sys/home-cluster-iac"
+    }
+  },
+  "build": {
+    "deterministic": true,
+    "artifact_count": 0,
+    "hashing": "SHA-256"
+  },
+  "lccp": {
+    "version": "v1.2",
+    "replay_results": {
+      "AsurDev": {
+        "valid": true,
+        "output_hash": "a70fff492b88279b15e684f9377d6bca51e933267c9ba5d299f5e4a6d3ec6260",
+        "stdout_len": 924
+      },
+      "home-cluster-iac": {
+        "valid": true,
+        "output_hash": "a70fff492b88279b15e684f9377d6bca51e933267c9ba5d299f5e4a6d3ec6260",
+        "stdout_len": 924
+      }
+    }
+  },
+  "provenance": {
+    "subject": [
+      {
+        "Name": "multi-repo-system",
+        "digest": {
+          "sha256": "9fb0ac022ce4183cb05dab8a5422acfebdc3d65707e66e403b6ca4e5e131d86f"
+        }
+      }
+    ],
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "predicate": {
+      "buildDefinition": {
+        "repository": {
+          "uri": "git+https://github.com/mahaasur13-sys"
+        },
+        "dispatchPath": ".github/workflows/ci.yml"
+      },
+      "runDetails": {
+        "builder": {
+          "id": "https://github.com/mahaasur13-sys"
+        },
+        "metadata": {
+          "finishedAt": "2026-04-10T10:48:30.953484+00:00"
+        }
+      }
+    },
+    "materials": [],
+    "predicate_digest": "9694407bbbedc4c1749cddb1391c736c244d7d61a4f2c8b99fb6fd013c8d4de5"
+  },
+  "external_attestation": {
+    "verified": false,
+    "method": "NONE",
+    "signature": "MISSING",
+    "reason": "NO_TRUST_ANCHOR"
+  },
+  "release_gate": {
+    "release_allowed": false,
+    "reason": "NO_EXTERNAL_TRUST_ANCHOR",
+    "hard_rule": "RELEASE = f(external_signature_verified)"
+  },
+  "gates": {
+    "G1_G1_commit": true,
+    "G2_G2_manifest": false,
+    "G3_G3_provenance": true,
+    "G4_G4_lccp": true,
+    "G5_G5_crossrepo": true,
+    "G6_G6_external_sig": false
+  },
+  "system_state": "ATTESTATION_BLOCKED_NO_EXTERNAL_PROOF",
+  "bundle_hash": "e4904b5a9c3694c4220e9d00df71af5134bbf567fdbf7bd36ab859baf6ca9ec0"
+}

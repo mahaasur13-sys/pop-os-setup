@@ -1,0 +1,140 @@
+{
+  "federation_id": "cvg-federation-v7.1",
+  "schema_version": "3.1",
+  "compiler_lock": "v3.1",
+  "nodes": 2,
+  "last_sync_hash": "ffe1994b802c2471",
+  "execution_parity": false,
+  "ir_parity": false,
+  "tee_parity": false,
+  "drift_detected": true,
+  "ir_parity_check": {
+    "step": "ir_parity_check",
+    "nodes": {
+      "home-cluster-iac": {
+        "status": "OK",
+        "schema": "3.1",
+        "policy_hash": "289c10298b5455c2e40ccf361f2ec1799fcd9af40057f44f80718eefb13d695e",
+        "toolchain_hash": "37f97df2a2988474b5eff05c38377ef276524350fd962bbad524c24ac7bdb5a2",
+        "ir_hash": "c43575e4865c1df5",
+        "render_hash": "016e25444361a6c1f50f0530c1f12aec76e29cf123c425f2c9fa9f1915d2e2af",
+        "jobs": [
+          "g0_setup",
+          "g1_yamllint",
+          "g2_ansible_lint",
+          "g3_ruff",
+          "g4_terraform",
+          "g5_pytest",
+          "g6_shellcheck",
+          "g7_makefile"
+        ]
+      },
+      "AsurDev": {
+        "status": "OK",
+        "schema": "3.1",
+        "policy_hash": "3ec51661aa5b5af6e7ce85be712f7b95dae30133a1c001c8b3f0b88d3babeeb8",
+        "toolchain_hash": "f9510b8802955c7863fc99505553371b9aafb52c595279530385c46fecbffd36",
+        "ir_hash": "d6339c1e94dd8bdb",
+        "render_hash": "",
+        "jobs": [
+          "g0_setup",
+          "g1_ruff",
+          "g2_black",
+          "g3_pytest"
+        ]
+      }
+    },
+    "parity": false,
+    "all_ir_hashes": [
+      "c43575e4865c1df5",
+      "d6339c1e94dd8bdb"
+    ]
+  },
+  "execution_mirror": {
+    "step": "execution_mirror",
+    "nodes": [
+      {
+        "node": "home-cluster-iac",
+        "execution_hash": "86dbc165b60faaed",
+        "ir_hash": "c43575e4865c1df5",
+        "job_count": 8,
+        "status": "executed"
+      },
+      {
+        "node": "AsurDev",
+        "execution_hash": "3da2647336e45b6d",
+        "ir_hash": "d6339c1e94dd8bdb",
+        "job_count": 4,
+        "status": "executed"
+      }
+    ],
+    "parity": false
+  },
+  "cross_node_validation": {
+    "step": "cross_node_validation",
+    "nodes": [
+      {
+        "node": "home-cluster-iac",
+        "execution_hash": "86dbc165b60faaed",
+        "ir_hash": "c43575e4865c1df5",
+        "job_count": 8,
+        "status": "executed",
+        "validated": true,
+        "expected_hash": "86dbc165b60faaed"
+      },
+      {
+        "node": "AsurDev",
+        "execution_hash": "3da2647336e45b6d",
+        "ir_hash": "d6339c1e94dd8bdb",
+        "job_count": 4,
+        "status": "executed",
+        "validated": true,
+        "expected_hash": "3da2647336e45b6d"
+      }
+    ],
+    "drift_detected": false,
+    "trusted_nodes": [
+      "home-cluster-iac",
+      "AsurDev"
+    ]
+  },
+  "diff_resolution": {
+    "step": "diff_resolution",
+    "drift_type": "EXECUTION_DRIFT",
+    "status": "DRIFT_DETECTED",
+    "hash_groups": {
+      "86dbc165b60faaed": [
+        "home-cluster-iac"
+      ],
+      "3da2647336e45b6d": [
+        "AsurDev"
+      ]
+    },
+    "reference_node": "home-cluster-iac",
+    "resolution_mode": "manual_override_required",
+    "auto_heal": false
+  },
+  "tee_attestations": {
+    "home-cluster-iac": {
+      "node_id": "home-cluster-iac",
+      "tee_status": "attested",
+      "platform": "simulated",
+      "measurement_hash": "ec98402999932e6b",
+      "quote_signature": "94de9fe792a5d24b",
+      "policy_hash": "289c10298b5455c2e40ccf361f2ec1799fcd9af40057f44f80718eefb13d695e",
+      "ir_hash": "c43575e4865c1df5",
+      "execution_hash": "86dbc165b60faaed"
+    },
+    "AsurDev": {
+      "node_id": "AsurDev",
+      "tee_status": "attested",
+      "platform": "simulated",
+      "measurement_hash": "47b00343db7b76ea",
+      "quote_signature": "1b13eeab196df209",
+      "policy_hash": "3ec51661aa5b5af6e7ce85be712f7b95dae30133a1c001c8b3f0b88d3babeeb8",
+      "ir_hash": "d6339c1e94dd8bdb",
+      "execution_hash": "3da2647336e45b6d"
+    }
+  },
+  "_generated_at": "2026-04-10T06:42:34.493855+00:00"
+}

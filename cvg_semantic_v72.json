@@ -1,0 +1,35 @@
+{
+  "schema": "cvg.semantic.v1",
+  "version": "7.2.0",
+  "reports": [
+    {
+      "repo_a": "home-cluster-iac",
+      "repo_b": "AsurDev",
+      "status": "DRIFT",
+      "drift_report": {
+        "class": "STRUCTURAL",
+        "severity": "LOW",
+        "scope_match": false,
+        "execution_equivalence": false,
+        "root_cause": "Scope mismatch: 'infra' vs 'test' (different execution domains)",
+        "action": "IGNORE",
+        "repo_a": "home-cluster-iac",
+        "repo_b": "AsurDev",
+        "scope_a": "infra",
+        "scope_b": "test",
+        "job_count_a": 8,
+        "job_count_b": 4,
+        "ir_hash_a": "a2b06577d29048ac",
+        "ir_hash_b": "c29b762a86dbf1bd",
+        "graph_hash_a": "3ae68203e1024b12",
+        "graph_hash_b": "42b4d4c47f93cd97",
+        "toolchain_hash_a": "9e5789dc6e40a6dd",
+        "toolchain_hash_b": "d9fcbb9b4bff5db4",
+        "env_hash_a": "1807a1ed75ad34e9",
+        "env_hash_b": "46dc5263d662c793",
+        "reason": "Heterogeneous execution domains \u2014 different scope is EXPECTED",
+        "note": "CI vs infra vs test pipelines are SUPPOSED to differ"
+      }
+    }
+  ]
+}

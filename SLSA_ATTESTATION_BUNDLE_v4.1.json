@@ -1,0 +1,110 @@
+{
+  "_type": "https://slsa.dev/Attestation/v1.0",
+  "attestation_level": 3,
+  "bundle_hash": "24958ddcaa3609cf67da55f7b0b4e5bb8050a3cdea1c95427c1cfc3c14a91993",
+  "external_attestation": {
+    "can_release": false,
+    "enabled": false,
+    "method": "UNSIGNED",
+    "release_allowed": false,
+    "release_blocked": true,
+    "signature": null,
+    "simulated": false,
+    "verification": "VERIFICATION_PENDING"
+  },
+  "generated_at": "2026-04-10T10:30:00Z",
+  "generator": "CVG-SLSA-Engine-v4.1-HONEST",
+  "lccp_replay": {
+    "AsurDev": {
+      "engine": "v1.2",
+      "event_hash": "a70fff492b88279b",
+      "summary": "LCCP v1.2 -- EVENT-SOURCED SOVEREIGNTY ACTIVE",
+      "valid": true
+    },
+    "home-cluster-iac": {
+      "engine": "v1.2",
+      "event_hash": "a70fff492b88279b",
+      "summary": "LCCP v1.2 -- EVENT-SOURCED SOVEREIGNTY ACTIVE",
+      "valid": true
+    }
+  },
+  "level_class": "SLSA_LEVEL_3_DETERMINISTIC",
+  "provenance": {
+    "AsurDev": {
+      "artifact_count": 354,
+      "commit": "e94be47c8852",
+      "deps": {
+        "requirements.txt": "24d2cdd05486f3a94870369efa31b42807aba25d2da9542047187f8407a5d3c5"
+      },
+      "lccp": {
+        "engine": "v1.2",
+        "event_hash": "a70fff492b88279b",
+        "summary": "LCCP v1.2 -- EVENT-SOURCED SOVEREIGNTY ACTIVE",
+        "valid": true
+      },
+      "tree": "ec933121561b"
+    },
+    "home-cluster-iac": {
+      "artifact_count": 783,
+      "commit": "b9965d16464a",
+      "deps": {
+        "requirements.txt": "24d2cdd05486f3a94870369efa31b42807aba25d2da9542047187f8407a5d3c5"
+      },
+      "lccp": {
+        "engine": "v1.2",
+        "event_hash": "a70fff492b88279b",
+        "summary": "LCCP v1.2 -- EVENT-SOURCED SOVEREIGNTY ACTIVE",
+        "valid": true
+      },
+      "tree": "d712c1558f61"
+    }
+  },
+  "slsa_compliance": {
+    "gaps": [
+      "No OIDC \u2014 PAT token cannot sign provenance. Need GitHub App + OIDC for true Level 3+.",
+      "No HSM \u2014 software-only signing. Need PKCS#11 HSM for Level 4.",
+      "No TPM \u2014 cannot verify hardware root of trust.",
+      "No cosign \u2014 cannot do keyless Sigstore signing (Fulcio/Rekor)."
+    ],
+    "level_1": true,
+    "level_2": true,
+    "level_3": true,
+    "level_4": false
+  },
+  "system": [
+    "AsurDev",
+    "home-cluster-iac"
+  ],
+  "trust_anchors": {
+    "github_actions": {
+      "available": true,
+      "token_scope": "repo",
+      "workflows": [
+        "Infra CI"
+      ]
+    },
+    "github_oidc": {
+      "available": false,
+      "can_request_token": false,
+      "reason": "PAT token (gho_...) \u2014 OIDC requires GitHub App or Actions OIDC endpoint",
+      "token_type": "PAT"
+    },
+    "gpg": {
+      "available": true,
+      "path": "/usr/bin/gpg"
+    },
+    "hsm": {
+      "available": false,
+      "found": []
+    },
+    "sigstore_cosign": {
+      "available": false,
+      "path": null
+    },
+    "tpm": {
+      "available": false,
+      "device": null
+    }
+  },
+  "version": "4.1"
+}

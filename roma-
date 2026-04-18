@@ -1,0 +1,49 @@
+name: ROMA CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install typer rich requests pyyaml plotly dash pytest pytest-asyncio resend --quiet
+      - name: Compile check
+        run: |
+          find . -name "*.py" -not -path "./__pycache__/*" -exec python -m py_compile {} + 2>&1 | tail -5
+          echo "Compile OK"
+      - name: Verify email templates
+        run: |
+          python3 -c "
+            from pathlib import Path
+            tmpl = Path('saas/email/templates')
+            files = list(tmpl.glob('*.j2'))
+            print(f'Email templates: {len(files)}')
+            for f in files: print(f'  {f.name}')
+            assert len(files) >= 3
+          "
+      - name: Run core tests
+        run: python3 test_ci.py
+      - name: Run email service tests
+        run: python3 -m pytest tests/test_email_service.py saas/email/ -v --tb=short 2>&1 | tail -15
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check . --output-format=text 2>&1 | head -20 || true

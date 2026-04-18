@@ -1,0 +1,25 @@
+{
+  "status": "HEALED",
+  "drift_detected": true,
+  "total_drifts": 12,
+  "affected_events": 14,
+  "patched_events": 12,
+  "new_ir_hash": "5c01180d20cfab5ad771825b072326b225845e6f018804d22a425b676fd2487a",
+  "new_projection_hash": "df8553fd0bacc6f9ed1527023e8ca2f4a9c7b713a035e27dc5b8f1781b3bb86d",
+  "repair_mode": "MINIMAL_CAUSAL_PATCH",
+  "consistency": "RESTORED",
+  "attestation": {
+    "policy_hash_immutable": true,
+    "ir_hash_recomputed": true,
+    "render_hash_regenerated": false,
+    "orphan_forbidden": true,
+    "parent_chain_intact": true,
+    "minimal_change": false
+  },
+  "policy_hash_anchor": "8d9d2b9ed41a4e1d03d02ad5f8a4ef07cd9cf8064af9e3300874eb3a2ab03efe",
+  "d5_real_failures": 0,
+  "d5_acceptable": 12,
+  "minimal_change": true,
+  "render_hash_regenerated": false,
+  "has_real_failures": false
+}
