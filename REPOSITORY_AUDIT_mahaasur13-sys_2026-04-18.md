@@ -11,7 +11,7 @@
 | `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟢 Root CI + Makefile (lint/stages/docs) | 🟢 Rich (README + guide + CONTRIBUTING) | 🟡 Basic | 🟡 Partial | **8/10** |
 | `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **10/10** |
 | `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **10/10** |
-| `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest+Deploy | 🟡 Basic | 🟢 SLSA+Trivy | 🟡 GHCR deploy | **8/10** |
+| `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest+Deploy+Integration | 🟡 Basic | 🟢 SLSA+Trivy | 🟡 GHCR deploy | **8.5/10** |
 
 ---
 
@@ -29,8 +29,9 @@
 | `roma-execution-bridge` | 9/10 | **9.5/10** | +Prometheus /metrics endpoint + ServiceMonitor template |
 | `roma-execution-bridge` | 9.5/10 | **10/10** | ArgoCD auto-sync Application (deploy/manifests → k8s, self-heal + prune enabled) |
 | `roma-execution-bridge` | 9.8/10 | **10/10** | +DR drill workflow (Velero restore test) |
-| `AsurDev` | 7/10 | **7.5/10** | +codecov `continue-on-error` removed from CI |
-| `AsurDev` | 7.5/10 | **8/10** | +deploy.yml — GHCR ml-api build+push on push to main/tag (666c3ac) |
+| `AsurDev` | 7/10 → **7.5/10** | +codecov `continue-on-error` removed from CI |
+| `AsurDev` | 7.5/10 → **8/10** | +deploy.yml — GHCR ml-api build+push on push to main/tag (666c3ac) |
+| `AsurDev` | 8/10 → **8.5/10** | +integration tests: tests/integration/test_ml_pipeline.py (synthetic dataset, train→predict→metrics, model quality AUC/RMSE thresholds) + integration-test job in CI (997ee57) |
 | `pop-os-setup` | 7.5/10 | **8/10** | +root CI workflow + Makefile (bash -n + shellcheck + stage detection + docs check) |
 
 ---
@@ -75,16 +76,17 @@
 
 ---
 
-## 2. `AsurDev` — 🟡 8/10
+## 2. `AsurDev` — 🟡 8.5/10
 
-> **Status:** CI+CD ready (GHCR deploy), development-grade, not production
+> **Status:** CI+CD ready (GHCR deploy), integration tests added, development-grade
 
 ### ✅ Strengths
 
-- **Full CI pipeline:** Ruff lint + Black format + pytest + coverage + codecov
+- **Full CI pipeline:** Ruff lint + Black format + pytest + coverage + codecov + **integration-test job**
+- **ML pipeline integration tests** ✅ (`tests/integration/test_ml_pipeline.py`): synthetic dataset → train failure/load models → POST /predict → GET /health → GET /metrics → model quality AUC/RMSE thresholds
 - **SLSA provenance** workflows (`slsa4-live.yml`, `slsa4-secure-release.yml`)
 - **Security scanning:** dependency-review, trivy SARIF, gitleaks
-- **Dependencies pinned:** `numpy>=1.24` (lower bound + upper bound pattern)
+- **Dependencies pinned:** `numpy>=1.24,<2.0` (lower bound + upper bound pattern)
 - **Cron schedule** for periodic security scans
 - **`pre-commit`** configured
 
@@ -92,7 +94,7 @@
 
 | Criterion | Status | Notes |
 |-----------|--------|-------|
-| No integration tests | 🟡 | Only `tests/test_ml_api.py` visible |
+| No integration tests | ✅ | `tests/integration/test_ml_pipeline.py` — synthetic data, train→predict→metrics, AUC/RMSE thresholds |
 | `codecov` `continue-on-error` | ✅ | Removed from CI |
 | No deployment pipeline | 🔴 | `ml-api-docker-run` is manual |
 | Backup/restore docs | 🔴 | None |
@@ -104,7 +106,7 @@
 
 1. ~~Fix codecov: remove `continue-on-error: true`~~ ✅ DONE — removed from `.github/workflows/ci.yml`
 2. ~~Add `deploy.yml`~~ ✅ DONE — GHCR push on push to main/tag (666c3ac), ml-api image built and pushed
-3. **Add integration tests** for ML pipeline (train → predict → metrics)
+3. ~~Add integration tests for ML pipeline~~ ✅ DONE — `tests/integration/test_ml_pipeline.py` (997ee57)
 4. **Add Velero backup** for TimescaleDB + ML models
 
 ---
