@@ -1,73 +1,95 @@
-# ATOMFederationOS — SBS v1
+# Pop!_OS 24.04 — AI/Dev Workstation Auto-Setup
 
-> System Boundary Spec — cross-cutting verification layer for distributed OS stack.
+> One-command setup for a production-ready AI/developer workstation on Pop!_OS 24.04 LTS (NVIDIA Edition).
 
-## Architecture
+## Features
 
-```
-┌─────────────────────────────────────────────────┐
-│  SBS (System Boundary Spec) — GLOBAL INVARIANTS │
-│  GlobalInvariantEngine │ FailureClassifier      │
-│  SYSTEM_CONTRACT                                │
-└───────────┬─────────────────┬──────────────────┘
-            ▼                 ▼                   ▼
-   CCL Contracts     F2/F3/F8 Kernel     DESC Log
-   (local rules)     (execution)         (audit trail)
-            ▲                 ▲                   ▲
-            └─────────────────┴───────────────────┘
-                       DRL (network reality)
-```
+- **26 automated stages** — from USB boot to fully configured system
+- **4 profiles**: `workstation`, `cluster`, `ai-dev`, `full`
+- **NVIDIA GPU** — proprietary driver, CUDA 12.4, cuDNN
+- **AI Stack** — PyTorch, TensorFlow, Jupyter Lab, Ollama, vLLM
+- **k3s Kubernetes** — single/multi-node with Longhorn, Rook Ceph, ArgoCD
+- **Developer tools** — Zsh + Oh My Zsh, Neovim + LazyVim, Docker/Podman
+- **Monitoring** — Prometheus, Grafana, Loki, nvtop, btop
+- **Security hardening** — UFW, fail2ban, unattended-upgrades, sysctl tuning
 
-## Stack Layers
-
-| Layer | Role |
-|---|---|
-| **DRL** | Distributed Reality Layer — network partition, clock skew, causality |
-| **CCL** | Consensus Contract Layer — semantic contracts, stale reads |
-| **F2/F3/F8** | Quorum kernel — commit safety, leader uniqueness |
-| **DESC** | Distributed Event Sourcing Component — immutable audit trail |
-| **SBS** | System Boundary Spec — **global invariant enforcement** |
-
-## SBS v1 Components
-
-| Module | Responsibility |
-|---|---|
-| `SystemBoundarySpec` | Hard boundary validation gate (split-brain, quorum, uncommitted reads) |
-| `GlobalInvariantEngine` | Cross-layer invariant verification (DRL+CCL+F2+DESC) |
-| `FailureClassifier` | Jepsen-aligned failure taxonomy (11 categories) |
-| `SYSTEM_CONTRACT` | Immutable hard constraints registry |
-
-## Installation
+## Quick Start
 
 ```bash
-pip install -e ".[dev]"
+# Full run (all 26 stages):
+sudo bash pop-os-setup-v5.sh
+
+# AI/Dev workstation only (no k8s/storage):
+sudo PROFILE=ai-dev bash pop-os-setup-v5.sh
+
+# Syntax check:
+bash -n pop-os-setup-v5.sh
 ```
 
-## Running Tests
+## Profiles
 
-```bash
-pytest sbs/tests/ -v
+| Profile | Stages | Use Case |
+|---------|--------|----------|
+| `workstation` | 1–3, 7–15, 18 | Base dev + AI (no k8s/storage) |
+| `cluster` | 1–3, 6–8, 14, 16–20 | k3s + storage + monitoring |
+| `ai-dev` | 1–15, 18 | Dev + AI + GPU (no storage) |
+| `full` | 1–26 | Everything |
+
+## Stage Map
+
+| # | Component | Profile |
+|---|-----------|---------|
+| 1 | Preflight checks | core |
+| 2 | System update | core |
+| 3 | NVIDIA Driver + system76-power | core |
+| 4 | CUDA Toolkit 12.4 + cuDNN | workstation/ai-dev/full |
+| 5 | Docker CE OR Podman | workstation/ai-dev/full |
+| 6 | k3s + Helm + kubectl + NVIDIA device plugin | cluster/full |
+| 7 | Dev Toolchain | core |
+| 8 | Zsh + Oh My Zsh + plugins | core |
+| 9 | Security: UFW, fail2ban, sysctl | workstation/ai-dev/full |
+| 10 | AI Stack: PyTorch, TensorFlow, Jupyter, Ollama | workstation/ai-dev/full |
+| 11 | Monitoring: nvtop, glances, btop | workstation/ai-dev/full |
+| 12 | Tailscale VPN + Funnel + Serve | workstation/ai-dev/full |
+| 13 | KDE Plasma Desktop | workstation/ai-dev/full |
+| 14 | SWAP 4GB + Unattended-Upgrades | core |
+| 15 | Jupyter Lab as systemd service | workstation/ai-dev/full |
+| 16 | Longhorn Storage | cluster/full |
+| 17 | Rook Ceph (Block + FS + Object) | cluster/full |
+| 18 | Neovim + LazyVim | workstation/ai-dev/full |
+| 19 | MinIO S3 Object Store | cluster/full |
+| 20 | Prometheus + Grafana + Loki | cluster/full |
+| 21 | CUDA Full Stack (Nsight, nvprof, cuBLAS) | full |
+| 22 | ROS2 Humble (Gazebo, colcon) | full |
+| 23 | k3s Full (Ingress NGINX, MetalLB, cert-manager, ArgoCD) | full |
+| 24 | Zsh Tuning (Starship, AI/K8s aliases) | full |
+| 25 | KDE Full Customization (latte-dock, Breeze Dark) | full |
+| 26 | AI Workstation (vLLM, Text Generation WebUI, Ollama) | full |
+
+## Conditional Logic
+
+```
+GPU detected = no  → Stages 3, 4, 21 (CUDA) auto-skipped
+k3s not installed   → Stages 16–20, 23 (storage/monitoring) auto-skipped
+PROFILE=workstation → stages 1–3, 7–15, 18 (no k8s, no storage)
+PROFILE=cluster     → stages 1–3, 6–8, 14, 16–20 (dev tools minimal)
+PROFILE=ai-dev      → stages 1–15, 18 (dev + AI, no storage)
+PROFILE=full        → all 26 stages
 ```
 
-## Quick Usage
+## Requirements
 
-```python
-from sbs import SystemBoundarySpec, GlobalInvariantEngine
+- Pop!_OS 24.04 LTS (NVIDIA ISO)
+- UEFI boot, Secure Boot can be disabled
+- Minimum 50GB disk, 16GB RAM recommended
+- NVIDIA GPU (GeForce/Quadro/RTX)
+- Internet connection (Ethernet recommended for k8s stages)
 
-spec = SystemBoundarySpec(allow_split_brain=False)
-engine = GlobalInvariantEngine(spec)
+## Documentation
 
-ok = engine.evaluate(
-    drl_state={"leader": "node-1", "term": 3, "partitions": 0},
-    ccl_state={"leader": "node-1", "term": 3, "stale_reads": 0},
-    f2_state={"leader": "node-1", "term": 3, "quorum_ratio": 0.9, "commit_index": 10},
-    desc_state={"leader": "node-1", "term": 3, "commit_index": 10},
-)
-print(ok)  # True
-```
+- `Pop_OS_KDE_NVIDIA_Guide.md` — detailed step-by-step guide
+- `RELEASE_NOTES.md` — full version history and changelog
 
-## Version History
+## License
 
-| Version | Milestone |
-|---|---|
-| **0.5.1** | SBS v1 — initial release (GlobalInvariantEngine, SystemBoundarySpec, FailureClassifier, SYSTEM_CONTRACT) |
+MIT

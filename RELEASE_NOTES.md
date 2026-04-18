@@ -41,6 +41,86 @@ make integration-test     # Run mock integration test
 
 ---
 
+### v5.0.0 — 26 Stages + Profile System (2026-04-18)
+
+> **Status: STABLE** | Stages 1-26 + 4 profiles | File: `pop-os-setup-v5.sh` (920 lines, bash syntax ✅ verified)
+
+**Changelog vs v4.0.0:**
+- ✅ Stages 21-26 added (CUDA Full, ROS2 Humble, k3s Full Stack, Zsh Tuning, KDE Customization, AI Workstation)
+- ✅ Profile system: `workstation | cluster | ai-dev | full`
+- ✅ `PROFILE=` env var support for non-interactive runs
+- ✅ Profile-based stage execution (core always runs, others conditional)
+- ✅ `bash -n pop-os-setup-v5.sh` → ✅ Syntax OK
+
+**Profiles:**
+| Profile | Stages | Use Case |
+|---------|--------|----------|
+| `workstation` | 1-3, 7-15, 18 | Base dev + AI (no k8s/storage) |
+| `cluster` | 1-3, 6-8, 14, 16-20 | k3s + storage + monitoring |
+| `ai-dev` | 1-15, 18 (all except k8s/storage) | Dev + AI + GPU |
+| `full` | 1-26 (all stages) | Everything |
+
+**Usage:**
+```bash
+# Default (full):
+sudo bash pop-os-setup-v5.sh
+
+# Workstation only:
+sudo PROFILE=workstation bash pop-os-setup-v5.sh
+
+# Cluster only:
+sudo PROFILE=cluster bash pop-os-setup-v5.sh
+
+# AI dev (no storage/k8s):
+sudo PROFILE=ai-dev bash pop-os-setup-v5.sh
+
+# Syntax check:
+bash -n pop-os-setup-v5.sh
+```
+
+**New Stage Map (26 stages):**
+
+| # | Component | Profile |
+|---|-----------|---------|
+| 1 | Preflight checks | core |
+| 2 | System update | core |
+| 3 | NVIDIA Driver + system76-power | core |
+| 4 | CUDA Toolkit 12.4 + cuDNN | workstation/ai-dev/full |
+| 5 | Docker CE OR Podman | workstation/ai-dev/full |
+| 6 | k3s + Helm + kubectl + NVIDIA device plugin | cluster/full |
+| 7 | Dev Toolchain | core |
+| 8 | Zsh + Oh My Zsh + plugins | core |
+| 9 | Security: UFW, fail2ban, sysctl | workstation/ai-dev/full |
+| 10 | AI Stack: PyTorch, TensorFlow, Jupyter, Ollama | workstation/ai-dev/full |
+| 11 | Monitoring: nvtop, glances, btop | workstation/ai-dev/full |
+| 12 | Tailscale VPN + Funnel + Serve | workstation/ai-dev/full |
+| 13 | KDE Plasma Desktop | workstation/ai-dev/full |
+| 14 | SWAP 4GB + Unattended-Upgrades | core |
+| 15 | Jupyter Lab as systemd service | workstation/ai-dev/full |
+| 16 | Longhorn Storage | cluster/full |
+| 17 | Rook Ceph (Block + FS + Object) | cluster/full |
+| 18 | Neovim + LazyVim | workstation/ai-dev/full |
+| 19 | MinIO S3 Object Store | cluster/full |
+| 20 | Prometheus + Grafana + Loki | cluster/full |
+| 21 | **CUDA Full Stack (Nsight, nvprof, cuBLAS)** | **full** |
+| 22 | **ROS2 Humble (Gazebo, colcon)** | **full** |
+| 23 | **k3s Full (Ingress NGINX, MetalLB, cert-manager, ArgoCD)** | **full** |
+| 24 | **Zsh Tuning (Starship, AI/K8s aliases)** | **full** |
+| 25 | **KDE Full Customization (latte-dock, Breeze Dark)** | **full** |
+| 26 | **AI Workstation (vLLM, Text Generation WebUI, Ollama)** | **full** |
+
+**Conditional logic:**
+```
+GPU detected = no → Stages 3, 4, 21 (CUDA) auto-skipped
+k3s not installed → Stages 16-20, 23 (storage/monitoring) auto-skipped
+PROFILE=workstation → stages 1-3, 7-15, 18 (no k8s, no storage)
+PROFILE=cluster → stages 1-3, 6-8, 14, 16-20 (dev tools minimal)
+PROFILE=ai-dev → stages 1-15, 18 (dev + AI, no storage)
+PROFILE=full → all 26 stages
+```
+
+---
+
 ### v4.0.0 — Combined Stable (2026-04-18)
 
 > **Status: STABLE** | Merged `v3.0.0` + `v2.0.0` → single unified script  
@@ -341,14 +421,22 @@ Longhorn via Helm with smart replica count:
 | 18 | Neovim + LazyVim | ✅ |
 | 19 | Tailscale VPN Mesh | ✅ |
 | 20 | Monitoring (Prometheus + Grafana + Loki) | ✅ |
+| 21 | CUDA Toolkit (full) | ✅ |
+| 22 | ROS2 Stack | ✅ |
+| 23 | k3s Kubernetes (full) | ✅ |
+| 24 | Zsh + Oh My Zsh tuning | ✅ |
+| 25 | KDE Full Customization | ✅ |
+| 26 | AI Workstation (vLLM, Ollama) | ✅ |
 
-## Planned / TODO
+---
 
-| Stage | Component | Status |
-|-------|-----------|--------|
-| 21 | CUDA Toolkit (full) | 🟡 |
-| 22 | ROS2 Stack | 🟡 |
-| 23 | k3s Kubernetes (full) | 🟡 |
-| 24 | Zsh + Oh My Zsh tuning | 🟡 |
-| 25 | KDE Full Customization | 🟡 |
-| 26 | AI Workstation (vLLM, Ollama) | 🟡 |
+## Profiles
+
+| Profile | Stages | Description |
+|---------|--------|-------------|
+| `workstation` | 1-3, 7-15, 18 | Base dev + AI (no k8s/storage) |
+| `cluster` | 1-3, 6-8, 14, 16-20 | k3s + storage + monitoring |
+| `ai-dev` | 1-15, 18 | Dev + AI + GPU (no storage) |
+| `full` | 1-26 | Everything |
+
+Run: `sudo PROFILE=<name> bash pop-os-setup-v5.sh`
