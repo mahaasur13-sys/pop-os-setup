@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    name: Lint & Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Shell script syntax check (bash -n)
+        run: |
+          for f in *.sh; do
+            bash -n "$f" && echo "✓ $f OK" || { echo "✗ $f FAILED"; exit 1; }
+          done
+        working-directory: ${{ github.workspace }}
+
+      - name: shellcheck
+        run: |
+          find . -maxdepth 3 -name "*.sh" ! -name "*.bak" -exec shellcheck -x -S warning {} \; 2>&1 || true
+        working-directory: ${{ github.workspace }}
+
+      - name: Detect stages in pop-os-setup-v5.sh
+        run: |
+          echo "=== Stage Detection ==="
+          grep -E "^[[:space:]]*(function )?[a-z_][a-z_0-9]*\(|^[[:space:]]*# Stage [0-9]" pop-os-setup-v5.sh \
+            | grep -v "^[[:space:]]*#" \
+            | head -40
+          echo "---"
+          echo "Total function definitions: $(grep -cE "^[a-z_][a-z_0-9]*\()" pop-os-setup-v5.sh)"
+          echo "Total comment blocks:       $(grep -cE "^[[:space:]]*# Stage [0-9]" pop-os-setup-v5.sh)"
+        working-directory: ${{ github.workspace }}
+
+      - name: Check required commands available in CI
+        run: |
+          echo "=== Command availability ==="
+          for cmd in nvidia-smi docker kubectl git curl wget python3 pip3 make; do
+            if command -v $cmd &>/dev/null; then echo "✓ $cmd"; else echo "✗ $cmd (missing)"; fi
+          done
+
+  docs:
+    name: Docs Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required documentation files exist
+        run: |
+          echo "=== Required docs ==="
+          for f in README.md CONTRIBUTING.md Pop_OS_KDE_NVIDIA_Guide.md; do
+            if [ -f "$f" ]; then echo "✓ $f"; else echo "✗ $f MISSING"; exit 1; fi
+          done
+
+      - name: Check README has stages table
+        run: |
+          grep -q "Stage [0-9]" README.md && echo "✓ Stages table found" || { echo "✗ No stages table"; exit 1; }
+
+      - name: Markdown lint (basic)
+        run: |
+          for f in *.md; do
+            # Check for broken links to internal files
+            grep -E '\.sh\b' "$f" | grep -v "^#" | while read line; do
+              shfile=$(echo "$line" | grep -oE '[a-zA-Z0-9_-]+\.sh')
+              if [ -n "$shfile" ] && [ ! -f "$shfile" ]; then
+                echo "✗ $f: references missing $shfile"
+                exit 1
+              fi
+            done
+            echo "✓ $f links OK"
+          done
+        working-directory: ${{ github.workspace }}
