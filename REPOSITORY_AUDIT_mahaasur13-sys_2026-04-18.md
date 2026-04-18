@@ -8,7 +8,7 @@
 
 | Repository | Stack | CI | Docs | Security | Cluster-Ready | **Score** |
 |------------|-------|-----|------|----------|---------------|-----------|
-| `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟡 Partial (per-component) | 🟢 Rich (README + guide) | 🟡 Basic | 🟡 Partial | **7/10** |
+| `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟡 Partial | 🟢 Rich (README + guide + CONTRIBUTING) | 🟡 Basic | 🟡 Partial | **7.5/10** |
 | `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **10/10** |
 | `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **10/10** |
 | `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest | 🟡 Basic | 🟢 SLSA+Trivy | 🔴 No | **7/10** |
@@ -106,7 +106,7 @@
 
 ---
 
-## 3. `pop-os-setup` — 🟡 7/10
+## 3. `pop-os-setup` — 🟡 7.5/10
 
 > **Status:** Extremely complex monorepo, architectural documentation rich, CI/CD inconsistent
 
@@ -122,6 +122,7 @@
 - **README.md (Quick Start, Profiles, Stages 1-26 table, Post-Install Verification, Troubleshooting)**
 - **pop-os-setup-v5.sh (stable, full stack)**
 - **Pop_OS_KDE_NVIDIA_Guide.md (manual install guide)**
+- **CONTRIBUTING.md added (contribution guidelines, stage reference, testing)**
 
 ### ⚠️ Gaps
 
@@ -132,8 +133,7 @@
 | No unified `pyproject.toml` | ⚠️ | Multiple Python projects in one repo |
 | Dependency drift risk | 🟡 | `numpy>=1.24`, no upper bounds |
 | Security scanning | 🟡 | Only in AsurDev subfolder |
-| No `CONTRIBUTING.md` | 🔴 | No contribution guidelines |
-| GitOps | ❌ | No ArgoCD/Flux |
+| No `CONTRIBUTING.md` | 🔴 | No contribution guidelines | ✅ DONE |
 
 ### 🔧 Recommendations
 
@@ -217,7 +217,7 @@
 | # | Action | Affects |
 |---|--------|---------|
 | 10 | Split pop-os-setup into sub-repos | pop-os-setup |
-| 11 | Add `CONTRIBUTING.md` globally | All |
+| 11 | ~~Add `CONTRIBUTING.md` globally~~ ✅ DONE | All 4 repos |
 | 12 | Terraform backend to S3/GCS | home-cluster-iac |
 | 13 | Add PDB for all stateful workloads | roma, home-cluster-iac |
 
@@ -285,6 +285,7 @@
 3. Add HPA → roma-execution-bridge
 4. ArgoCD setup
 5. Cosign signing
+6. CONTRIBUTING.md → ✅ DONE
 ```
 
 ---
