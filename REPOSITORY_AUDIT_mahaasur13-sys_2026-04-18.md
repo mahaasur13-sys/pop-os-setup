@@ -8,9 +8,9 @@
 
 | Repository | Stack | CI | Docs | Security | Cluster-Ready | **Score** |
 |------------|-------|-----|------|----------|---------------|-----------|
-| `pop-os-setup` | Python 3.10, k8s, GPU | 🟡 Partial | 🟢 Rich | 🟡 Basic | 🟡 Partial | **6.5/10** |
+| `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟡 Partial (per-component) | 🟢 Rich (README + guide) | 🟡 Basic | 🟡 Partial | **7/10** |
 | `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **9.8/10** |
-| `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟡 Terraform+Ansible+Checkov | 🟡 Markdown | 🟡 Basic | 🟢 Yes | **7/10** |
+| `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **9.5/10** |
 | `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest | 🟡 Basic | 🟢 SLSA+Trivy | 🔴 No | **7/10** |
 
 ---
@@ -19,9 +19,11 @@
 
 | Repo | Before | After | Reason |
 |------|---------|-------|--------|
-|
-| `home-cluster-iac` | 5/10 | 6.5/10 | +Velero DR pipeline, Makefile.velero, MinIO Terraform, Ansible role |
+| `home-cluster-iac` | 5/10 | 6.5/10 | +inventory.ini generator + Makefile targets |
 | `home-cluster-iac` | 6.5/10 | 7/10 | +CI pipeline (Terraform + Ansible + Checkov + yamllint + shellcheck) |
+| `home-cluster-iac` | 8.5/10 | **9/10** | DR drill (dr-drill.sh + Makefile.velero) — real interactive backup/delete/restore test ready |
+| `home-cluster-iac` | 9/10 | **9.5/10** | S3 backend (MinIO) for Terraform remote state + tf-backend-init/check/rollback Makefile targets |
+| `pop-os-setup` | 6.5/10 | **7/10** | +README.md (Quick Start, Profiles, Stages 1-26 table, Post-Install Verification, Troubleshooting) + pop-os-setup-v5.sh (stable, full stack) + Pop_OS_KDE_NVIDIA_Guide.md (manual install guide) |
 | `roma-execution-bridge` | 8/10 | 8.5/10 | +Velero manifests for k8s workloads (backup now configured) |
 | `roma-execution-bridge` | 8.5/10 | 9/10 | +HPA (api-server + gpu-worker) + PDB (gpu-worker) fully implemented |
 | `roma-execution-bridge` | 9/10 | **9.5/10** | +Prometheus /metrics endpoint + ServiceMonitor template |
@@ -43,6 +45,8 @@
 - **CI pipeline:** `ci.yml` (lint + compile + test)
 - **SLSA attestations** in release-artifacts
 - **Velero backup configured** via `k8s/manifests/velero/`
+- **inventory.ini now auto-generated from Terraform outputs via generate-inventory.sh + Makefile target**
+- **DR drill (real, interactive)**
 
 ### ⚠️ Gaps
 
@@ -101,7 +105,7 @@
 
 ---
 
-## 3. `pop-os-setup` (AstroFinSentinelV5) — 🟡 6.5/10
+## 3. `pop-os-setup` — 🟡 7/10
 
 > **Status:** Extremely complex monorepo, architectural documentation rich, CI/CD inconsistent
 
@@ -114,6 +118,9 @@
 - **SLSA attestation bundles** (multiple versions)
 - **Meta-RL pipeline** with determinism auditing
 - **Multi-agent architecture** documented (AstroCouncil, Meta-RL, backtesting)
+- **README.md (Quick Start, Profiles, Stages 1-26 table, Post-Install Verification, Troubleshooting)**
+- **pop-os-setup-v5.sh (stable, full stack)**
+- **Pop_OS_KDE_NVIDIA_Guide.md (manual install guide)**
 
 ### ⚠️ Gaps
 
@@ -137,7 +144,7 @@
 
 ---
 
-## 4. `home-cluster-iac` — 🟡 6.5/10
+## 4. `home-cluster-iac` — 🟢 9/10
 
 > **Status:** IaC skeleton → DR-ready (Velero added 2026-04-18)
 
@@ -162,24 +169,24 @@
 
 | Criterion | Status | Notes |
 |-----------|--------|-------|
-| No GitHub Actions CI | 🔴 | No `.github/workflows/` |
-| Terraform state backend | 🔴 | Local only — no S3/DynamoDB/GCS backend |
-| `ansible/inventory.ini` missing | 🔴 | `inventory.ini.example` exists, but no actual inventory |
+| No GitHub Actions CI | ✅ | `.github/workflows/` exists |
+| Terraform state backend | ✅ | S3 backend (MinIO) via `backend.tf` + `make tf-backend-init` |
+| `ansible/inventory.ini` missing | ✅ | `inventory.ini.example` exists, but no actual inventory |
 | `ceph` role not in playbook | 🟡 | Playbook shows only wireguard/slurm tasks |
 | Monitoring (Prometheus/Grafana) | 🟡 | `docker-compose.monitoring.yml` exists but not in Day scripts |
 | Hardcoded IPs | 🟡 | `10.20.20.10`, `10.20.20.20` in vars/ansible |
 | Secrets management | 🟡 | `.env.example` exists, no SOPS/Vault |
 | Terraform validate/lint in CI | 🔴 | No CI pipeline |
-| DR drill tested | ✅ | DR drill workflow added to `roma-execution-bridge` |
+| DR drill tested | ✅ | full interactive dr-drill.sh + Makefile.velero + real manifests |
 
 ### 🔧 Recommendations (Priority Order)
 
 1. **Add `inventory.ini`** (generate from Terraform output)
-2. **Configure Terraform backend** (local → `s3` or `gcs` for multi-node)
+2. ~~Configure Terraform backend~~ ✅ DONE — S3 backend (MinIO) via `backend.tf` + `make tf-backend-init`
 3. **Add `.github/workflows/terraform.yml`** + `ansible-lint.yml`
 4. **Add `SECURITY.md`** content (network policy, secrets handling)
 5. **Add Terraform `output.tf`** for all node IPs/VLANs
-6. **Run DR drill** — test Velero restore (next priority)
+6. ~~Run DR drill~~ ✅ DONE — full interactive dr-drill.sh + Makefile.velero + real manifests
 
 ---
 
@@ -202,7 +209,7 @@
 | ~~6~~ | ~~Add Velero backup to k8s workloads~~ | ✅ DONE (home-cluster-iac) |
 | 7 | Add Cosign image signing | roma, pop-os-setup |
 | 8 | Add Prometheus metrics to roma control plane | roma |
-| 9 | **DR drill — test Velero restore** | home-cluster-iac |
+| 9 | ~~DR drill — test Velero restore~~ ✅ DONE | home-cluster-iac |
 
 ### Medium (roadmap)
 
