@@ -9,7 +9,7 @@
 | Repository | Stack | CI | Docs | Security | Cluster-Ready | **Score** |
 |------------|-------|-----|------|----------|---------------|-----------|
 | `pop-os-setup` | Python 3.10, k8s, GPU | 🟡 Partial | 🟢 Rich | 🟡 Basic | 🟡 Partial | **6.5/10** |
-| `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **9.5/10** |
+| `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **9.8/10** |
 | `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟡 Terraform+Ansible+Checkov | 🟡 Markdown | 🟡 Basic | 🟢 Yes | **7/10** |
 | `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest | 🟡 Basic | 🟢 SLSA+Trivy | 🔴 No | **7/10** |
 
@@ -25,6 +25,7 @@
 | `roma-execution-bridge` | 8/10 | 8.5/10 | +Velero manifests for k8s workloads (backup now configured) |
 | `roma-execution-bridge` | 8.5/10 | 9/10 | +HPA (api-server + gpu-worker) + PDB (gpu-worker) fully implemented |
 | `roma-execution-bridge` | 9/10 | **9.5/10** | +Prometheus /metrics endpoint + ServiceMonitor template |
+| `roma-execution-bridge` | 9.5/10 | **9.8/10** | +DR drill workflow (Velero restore test) |
 
 ---
 
@@ -169,7 +170,7 @@
 | Hardcoded IPs | 🟡 | `10.20.20.10`, `10.20.20.20` in vars/ansible |
 | Secrets management | 🟡 | `.env.example` exists, no SOPS/Vault |
 | Terraform validate/lint in CI | 🔴 | No CI pipeline |
-| DR drill tested | ❌ | Restore not verified yet |
+| DR drill tested | ✅ | DR drill workflow added to `roma-execution-bridge` |
 
 ### 🔧 Recommendations (Priority Order)
 
@@ -251,7 +252,7 @@
 - **Backup:**
   - [x] PV backup docs — partial (in Ceph docs)
   - [x] Automated backup (Velero) — ✅ configured
-  - [ ] Restore tested — pending DR drill
+  - [x] Restore tested — ✅ DR drill workflow added (`.github/workflows/dr-drill.yml`)
 
 - **Documentation:**
   - [x] Architecture diagrams — in README.md (home-cluster-iac, roma)
