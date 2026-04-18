@@ -11,7 +11,7 @@
 | `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟡 Partial | 🟢 Rich (README + guide + CONTRIBUTING) | 🟡 Basic | 🟡 Partial | **7.5/10** |
 | `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **10/10** |
 | `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **10/10** |
-| `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest | 🟡 Basic | 🟢 SLSA+Trivy | 🔴 No | **7.5/10** |
+| `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest+Deploy | 🟡 Basic | 🟢 SLSA+Trivy | 🟡 GHCR deploy | **8/10** |
 
 ---
 
@@ -30,6 +30,7 @@
 | `roma-execution-bridge` | 9.5/10 | **10/10** | ArgoCD auto-sync Application (deploy/manifests → k8s, self-heal + prune enabled) |
 | `roma-execution-bridge` | 9.8/10 | **10/10** | +DR drill workflow (Velero restore test) |
 | `AsurDev` | 7/10 | **7.5/10** | +codecov `continue-on-error` removed from CI |
+| `AsurDev` | 7.5/10 | **8/10** | +deploy.yml — GHCR ml-api build+push on push to main/tag (666c3ac) |
 
 ---
 
@@ -73,9 +74,9 @@
 
 ---
 
-## 2. `AsurDev` — 🟡 7.5/10
+## 2. `AsurDev` — 🟡 8/10
 
-> **Status:** CI-ready, development-grade, not production
+> **Status:** CI+CD ready (GHCR deploy), development-grade, not production
 
 ### ✅ Strengths
 
@@ -101,8 +102,8 @@
 ### 🔧 Recommendations
 
 1. ~~Fix codecov: remove `continue-on-error: true`~~ ✅ DONE — removed from `.github/workflows/ci.yml`
-2. **Add integration tests** for ML pipeline (train → predict → metrics)
-3. **Add `deploy.yml`** for Docker image build → GHCR push
+2. ~~Add `deploy.yml`~~ ✅ DONE — GHCR push on push to main/tag (666c3ac), ml-api image built and pushed
+3. **Add integration tests** for ML pipeline (train → predict → metrics)
 4. **Add Velero backup** for TimescaleDB + ML models
 
 ---
