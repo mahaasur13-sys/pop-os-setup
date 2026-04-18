@@ -8,7 +8,7 @@
 
 | Repository | Stack | CI | Docs | Security | Cluster-Ready | **Score** |
 |------------|-------|-----|------|----------|---------------|-----------|
-| `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟡 Partial | 🟢 Rich (README + guide + CONTRIBUTING) | 🟡 Basic | 🟡 Partial | **7.5/10** |
+| `pop-os-setup` | Bash, k8s, GPU, CUDA | 🟢 Root CI + Makefile (lint/stages/docs) | 🟢 Rich (README + guide + CONTRIBUTING) | 🟡 Basic | 🟡 Partial | **8/10** |
 | `roma-execution-bridge` | Python 3.11, K8s, Raft, Stripe | 🟢 Basic | 🟢 Full | 🟢 Vault+SealedSecrets | 🟢 Yes | **10/10** |
 | `home-cluster-iac` | Terraform, Ansible, Slurm, Ceph | 🟢 Terraform+Ansible+Checkov (full CI) | 🟢 Markdown (full arch/VLAN docs) | 🟡 Basic | 🟢 Yes | **10/10** |
 | `AsurDev` | Python, FastAPI, ML | 🟢 Ruff+Black+Pytest+Deploy | 🟡 Basic | 🟢 SLSA+Trivy | 🟡 GHCR deploy | **8/10** |
@@ -31,6 +31,7 @@
 | `roma-execution-bridge` | 9.8/10 | **10/10** | +DR drill workflow (Velero restore test) |
 | `AsurDev` | 7/10 | **7.5/10** | +codecov `continue-on-error` removed from CI |
 | `AsurDev` | 7.5/10 | **8/10** | +deploy.yml — GHCR ml-api build+push on push to main/tag (666c3ac) |
+| `pop-os-setup` | 7.5/10 | **8/10** | +root CI workflow + Makefile (bash -n + shellcheck + stage detection + docs check) |
 
 ---
 
@@ -108,7 +109,7 @@
 
 ---
 
-## 3. `pop-os-setup` — 🟡 7.5/10
+## 3. `pop-os-setup` — 🟡 8/10
 
 > **Status:** Extremely complex monorepo, architectural documentation rich, CI/CD inconsistent
 
@@ -130,20 +131,20 @@
 
 | Criterion | Status | Notes |
 |-----------|--------|-------|
-| No root `.github/workflows/` | 🔴 | CI only per-component |
+| No root `.github/workflows/` | ✅ | CI added at root (`.github/workflows/ci.yml`) |
 | Extremely large monorepo | ⚠️ | All sub-projects merged (acos, k8s, slurm, ml_engine, etc.) |
 | No unified `pyproject.toml` | ⚠️ | Multiple Python projects in one repo |
 | Dependency drift risk | 🟡 | `numpy>=1.24`, no upper bounds |
 | Security scanning | 🟡 | Only in AsurDev subfolder |
-| No `CONTRIBUTING.md` | 🔴 | No contribution guidelines | ✅ DONE |
+| No `CONTRIBUTING.md` | ✅ | Added (contribution guidelines, stage reference, testing) |
+| No root `Makefile` | ✅ | Added (make lint/check-stages/docs/test/clean) |
 
 ### 🔧 Recommendations
 
 1. **Split into focused repos** or add `*.md` documentation for each sub-project
-2. **Add root `Makefile`** with `make test-all`, `make lint-all`
-3. **Add `.github/workflows/ci.yml`** at root level
-4. **Pin Python deps** with `<` upper bounds
-5. **Add `CONTRIBUTING.md`** with PR template
+2. **Pin Python deps** with `<` upper bounds
+3. Add security scanning to root CI (trivy, gitleaks)
+4. Add integration tests for stage functions
 
 ---
 
