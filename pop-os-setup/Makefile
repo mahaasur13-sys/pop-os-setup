@@ -46,7 +46,7 @@ lint: install
 check-stages:
 	@echo "=== Stage file check ==="
 	@total=0; passed=0; \
-	for i in $$(seq 1 13); do \
+	for i in $$(seq 1 26); do \
 		file=$$(ls stages/stage$${i}_*.sh 2>/dev/null | head -1); \
 		if [ -n "$$file" ]; then \
 			name=$$(grep -m1 "^[[:space:]]*stage_.*()" "$$file" 2>/dev/null | sed 's/stage_//;s/(.*//' | head -1); \
