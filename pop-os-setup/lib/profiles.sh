@@ -1,125 +1,36 @@
 #!/bin/bash
-#===============================================================================
-# Profiles Library — pop-os-setup
-#===============================================================================
-# Deployment profile definitions
-# Each profile sets ENABLE_* variables consumed by stages
-#===============================================================================
+# lib/profiles.sh — Profile loader for pop-os-setup v3.0.0
 
-#--- Profile Definitions ------------------------------------------------------
-# Format: ENABLE_<FEATURE>=0|1
-# Stages check these variables to decide what to install
+[[ -n "${_PROFILES_SOURCED:-}" ]] && return 0 || _PROFILES_SOURCED=1
 
-#===============================================================================
-# Profile: workstation (AI/Dev workstation, single machine)
-#===============================================================================
-apply_profile_workstation() {
-    log "Applying profile: workstation (AI/Dev single-machine)"
+load_profile() {
+    local name="$1"
+    local pfile="${PROFILESDIR}/${name}.sh"
 
-    export ENABLE_SSH=0
-    export ENABLE_DOCKER=1
-    export ENABLE_CUDA=0
-    export ENABLE_AI=1
-    export ENABLE_HARDEN=1
-    export ENABLE_KDE=1
-    export ENABLE_ZSH=1
-    export ENABLE_TAILSCALE=0
-    export ENABLE_K8S=0
-    export ENABLE_SLURM=0
-    export ENABLE_MONITORING=1
+    if [[ ! -f "$pfile" ]]; then
+        err "Profile not found: $name"
+        err "Available: $(ls "$PROFILESDIR"/*.sh 2>/dev/null | xargs -I{} basename {} .sh | tr '\n' ' ')"
+        return 2
+    fi
 
-    log "Profile: workstation → SSH=0 Docker=1 CUDA=0 AI=1 Hardening=1 KDE=1 Zsh=1"
+    info "Loading profile: $name"
+    # shellcheck disable=SC1090
+    source "$pfile"
+
+    local func="apply_profile_${name//-/_}"
+    if ! declare -f "$func" &>/dev/null; then
+        err "Function '${func}' not found in $pfile"; return 1; fi
+
+    # Unset all ENABLE_ vars
+    unset ENABLE_SSH ENABLE_DOCKER ENABLE_CUDA ENABLE_AI \
+          ENABLE_HARDEN ENABLE_KDE ENABLE_ZSH ENABLE_TAILSCALE \
+          ENABLE_K8S ENABLE_SLURM ENABLE_MONITORING 2>/dev/null
+
+    "$func"; ok "Profile applied: $name"
 }
 
-#===============================================================================
-# Profile: cluster (home-cluster node, Slurm/Ray/K8s)
-#===============================================================================
-apply_profile_cluster() {
-    log "Applying profile: cluster (home-cluster compute node)"
-
-    export ENABLE_SSH=1
-    export ENABLE_DOCKER=1
-    export ENABLE_CUDA=1
-    export ENABLE_AI=1
-    export ENABLE_HARDEN=1
-    export ENABLE_KDE=0
-    export ENABLE_ZSH=1
-    export ENABLE_TAILSCALE=1
-    export ENABLE_K8S=1
-    export ENABLE_SLURM=1
-    export ENABLE_MONITORING=1
-
-    log "Profile: cluster → SSH=1 Docker=1 CUDA=1 AI=1 Hardening=1 Tailscale=1 K8s=1 Slurm=1"
-}
-
-#===============================================================================
-# Profile: ai-dev (AI researcher, GPU-heavy, Jupyter + CUDA)
-#===============================================================================
-apply_profile_ai_dev() {
-    log "Applying profile: ai-dev (AI researcher / ML engineer)"
-
-    export ENABLE_SSH=0
-    export ENABLE_DOCKER=1
-    export ENABLE_CUDA=1
-    export ENABLE_AI=1
-    export ENABLE_HARDEN=1
-    export ENABLE_KDE=1
-    export ENABLE_ZSH=1
-    export ENABLE_TAILSCALE=0
-    export ENABLE_K8S=0
-    export ENABLE_SLURM=0
-    export ENABLE_MONITORING=1
-
-    log "Profile: ai-dev → SSH=0 Docker=1 CUDA=1 AI=1 Hardening=1 KDE=1 Zsh=1"
-}
-
-#===============================================================================
-# Profile: full (all components — maximum installation)
-#===============================================================================
-apply_profile_full() {
-    log "Applying profile: full (all components)"
-
-    export ENABLE_SSH=1
-    export ENABLE_DOCKER=1
-    export ENABLE_CUDA=1
-    export ENABLE_AI=1
-    export ENABLE_HARDEN=1
-    export ENABLE_KDE=1
-    export ENABLE_ZSH=1
-    export ENABLE_TAILSCALE=1
-    export ENABLE_K8S=1
-    export ENABLE_SLURM=1
-    export ENABLE_MONITORING=1
-
-    log "Profile: full → all enabled"
-}
-
-#===============================================================================
-# Profile dispatcher
-#===============================================================================
-apply_profile() {
-    local profile="${1:-workstation}"
-    case "$profile" in
-        workstation) apply_profile_workstation ;;
-        cluster)    apply_profile_cluster    ;;
-        ai-dev)     apply_profile_ai_dev     ;;
-        full)       apply_profile_full       ;;
-        *)
-            err "Unknown profile: $profile"
-            err "Available: workstation, cluster, ai-dev, full"
-            return 1
-            ;;
-    esac
-    log "Profile '$profile' applied"
-}
-
-#===============================================================================
-# Print available profiles
-#===============================================================================
 list_profiles() {
-    echo "Available deployment profiles:"
-    echo "  workstation  — AI/Dev single-machine (default)"
-    echo "  cluster      — home-cluster compute node (K8s+Slurm+Ray)"
-    echo "  ai-dev       — AI researcher (CUDA + Jupyter + PyTorch)"
-    echo "  full         — all components maximum installation"
+    for f in "${PROFILESDIR}"/*.sh; do
+        [[ -f "$f" ]] && basename "$f" .sh
+    done
 }

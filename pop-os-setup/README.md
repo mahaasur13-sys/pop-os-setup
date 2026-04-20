@@ -1,312 +1,191 @@
-# Pop!_OS 24.04 LTS NVIDIA — AI/Dev Workstation Auto-Setup
+# Pop!_OS Setup — v3.0.0
 
-> **Scripts:** `pop-os-setup-v5.sh` (stable) | `pop-os-setup.sh` (legacy v3)
+> Modular auto-setup for Pop!_OS 24.04 LTS NVIDIA Edition — AI/Dev workstation
 
-**Version:** 5.0.0 (2026-04-18) | **Target:** Pop!_OS 24.04 LTS NVIDIA Edition
+[![v3.0.0](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/mahaasur13-sys/pop-os-setup)
+[![shellcheck](https://github.com/mahaasur13-sys/pop-os-setup/actions/workflows/lint.yml/badge.svg)](https://github.com/mahaasur13-sys/pop-os-setup/actions)
+[![Made for Pop!_OS](https://img.shields.io/badge/Pop!_OS-24.04%20LTS-red.svg)](https://pop.system76.com)
 
 ---
 
 ## Navigation
 
 - [Quick Start](#-quick-start)
+- [Architecture](#-architecture)
 - [Profiles](#-profiles)
 - [Stages](#-stages-126)
-- [Post-Install Verification](#-post-install-verification)
+- [Security](#-security)
+- [Makefile](#-makefile)
 - [Troubleshooting](#-troubleshooting)
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Download
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mahaasur13-sys/pop-os-setup/main/pop-os-setup-v5.sh -o pop-os-setup-v5.sh
-chmod +x pop-os-setup-v5.sh
+# Clone
+git clone https://github.com/mahaasur13-sys/pop-os-setup.git
+cd pop-os-setup
+
+# Run (full setup, all stages)
+sudo make run
+
+# Run specific profile
+sudo PROFILE=workstation make run
+
+# Verify without running
+make verify
 ```
 
-### 2. Run
+### Requirements
 
-```bash
-# Full profile (default — workstation + cluster + AI-dev)
-sudo bash pop-os-setup-v5.sh
+- Pop!_OS 24.04 LTS (or Debian 12-based distro)
+- NVIDIA GPU (optional — stages skip gracefully)
+- Root/sudo access
+- Internet connection
 
-# Interactive profile selection
-sudo PROFILE=ai-dev bash pop-os-setup-v5.sh
+---
 
-# Workstation only (KDE + Docker + dev tools)
-sudo PROFILE=workstation bash pop-os-setup-v5.sh
+## 🏗 Architecture
+
+```
+pop-os-setup/
+├── pop-os-setup.sh          # Main entry — sources lib/*.sh, runs selected profile
+├── lib/
+│   ├── logging.sh            # step(), ok(), warn(), err(), info(), log_sep()
+│   ├── utils.sh             # get_target_user, get_user_home, pkg_installed,
+│   │                         # ensure_dir, backup_file, append_once, apply_sysctl
+│   ├── installer.sh          # safe_git_clone, safe_download, install_oh_my_zsh_safe,
+│   │                         # install_neovim_safe, install_docker_compose_safe, etc.
+│   └── profiles.sh           # Stage lists per profile (workstation/cluster/ai-dev/full)
+├── stages/
+│   ├── stage05_zsh.sh
+│   ├── stage09_cuda.sh
+│   ├── stage10_hardening.sh
+│   ├── stage13_ollama.sh
+│   ├── stage14_kubectl.sh
+│   ├── stage17_docker_compose.sh
+│   ├── stage19_monitoring.sh
+│   ├── stage21_cron.sh
+│   ├── stage22_neovim.sh
+│   ├── stage23_notifications.sh
+│   ├── stage24_ssh_gpg.sh
+│   ├── stage25_backup.sh
+│   └── stage26_final.sh
+├── profiles/
+│   ├── workstation.sh
+│   ├── cluster.sh
+│   ├── ai-dev.sh
+│   └── full.sh
+├── tests/integration/
+│   ├── run.sh
+│   ├── test-lib.sh
+│   ├── test-stages.sh
+│   ├── test-profiles.sh
+│   └── test-cli.sh
+└── Makefile
 ```
 
-### 3. Verify
+### Design Principles
 
-```bash
-# After script completes
-nvidia-smi
-kubectl get nodes
-docker ps
-tailscale status
-```
+| Principle | Implementation |
+|-----------|---------------|
+| **Idempotency** | All stage functions safe to re-run; checks `! -f` before creating |
+| **No curl\|sh** | All downloads go through `safe_download` → local file → execute |
+| **No credentials in logs** | Passwords stored in `~/.config/pop-os-setup/`, never echo'd |
+| **Defensive** | `set -euo pipefail` in scripts; `command_exists` / `pkg_installed` checks |
+| **RCE-free** | No `eval`, no unquoted variables in command substitution |
+| **Modular** | Each stage is independent; profiles compose stage subsets |
 
 ---
 
 ## 📦 Profiles
 
-| Profile | Description | When to use |
-|---------|-------------|-------------|
-| `workstation` | KDE + Docker + Zsh + Python + Neovim | Single machine, dev workstation |
-| `cluster` | k3s + Longhorn + networking | Multi-node home lab |
-| `ai-dev` | CUDA + Ollama + Jupyter + PyTorch | AI/ML development |
-| `full` *(default)* | All of the above | Maximum capability |
-
-### Profile Selection
-
-```bash
-# Via environment variable
-sudo PROFILE=workstation bash pop-os-setup-v5.sh
-
-# Via interactive prompt (no PROFILE set)
-# Script will ask: workstation / cluster / ai-dev / full
-```
+| Profile | Stages | Use case |
+|---------|--------|----------|
+| `workstation` | 5,7,8,10,17,21,22,23,24,25,26 | Desktop — KDE, Docker, Zsh, Neovim, SSH, backup |
+| `cluster` | 10,14,15,16,17,18,19,20,21,26 | Home lab — k3s, Longhorn, Ceph, MetalLB |
+| `ai-dev` | 5,7,8,9,10,12,13,17,21,22,23,25,26 | AI/ML — CUDA, Ollama, Jupyter, PyTorch |
+| `full` | All stages | Everything |
 
 ---
 
 ## 📐 Stages 1–26
 
-| Stage | Name | Notes |
-|-------|------|-------|
-| 1 | Preflight checks | OS, GPU, network detection |
-| 2 | System update | apt upgrade |
-| 3 | NVIDIA driver | Skipped if no GPU |
-| 4 | system76-power | Optional (laptops) |
-| 5 | Display Manager | SDDM + KDE Plasma |
-| 6 | Dev toolchain | build-essential, git, curl, Python |
-| 7 | Container runtime | Docker + Compose v2 |
-| 8 | Zsh + Oh My Zsh | Interactive shell |
-| 9 | Neovim + LazyVim | Configured IDE |
-| 10 | Tailscale | VPN mesh |
-| 11 | Firewall | UFW ( deny incoming, allow outgoing) |
-| 12 | Python AI stack | pip install numpy pandas torch jupyter |
-| 13 | Ollama | Local LLM inference |
+| # | Name | Key actions |
+|---|------|-------------|
+| 5 | Zsh + Oh My Zsh | install_oh_my_zsh_safe, plugins |
+| 9 | CUDA Toolkit | nvidia-cuda-toolkit, driver check |
+| 10 | System Hardening | UFW, fail2ban, sysctl, unattended-upgrades |
+| 13 | Ollama | local LLM inference |
 | 14 | kubectl + Helm | k8s tooling |
-| 15 | k3s | Lightweight Kubernetes |
-| 16 | Longhorn | Distributed block storage |
-| 17 | MetalLB | Bare-metal load balancing |
-| 18 | Cilium CNI | eBPF networking |
-| 19 | Rook Ceph | Distributed storage |
-| 20 | MinIO | S3-compatible object storage |
-| 21 | Monitoring | Prometheus + Grafana + Loki |
-| 22 | Backup (Velero) | k8s disaster recovery |
-| 23 | Security hardening | fail2ban, UFW rules, auditd |
-| 24 | Recovery image | USB rescue partition |
-| 25 | Final verification | Full health check |
-| 26 | Cleanup | apt autoremove, temp files |
+| 17 | Docker Compose | install_docker_compose_safe |
+| 19 | Monitoring | Prometheus + Grafana + Loki |
+| 21 | Cron Jobs | log cleanup, disk check, backup reminder |
+| 22 | Neovim | install_neovim_safe + init.lua |
+| 23 | Notifications | systemd user timers (GPU temp, updates) |
+| 24 | SSH + GPG | ED25519 key with passphrase, gpg-agent, YubiKey |
+| 25 | Backup & Recovery | Timeshift + rsync script + weekly schedule |
+| 26 | Final Report | Service status, credentials summary, next steps |
 
 ---
 
-## ✅ Post-Install Verification
+## 🔐 Security
 
-Run these commands to confirm the system is operational:
+- **UFW** — default deny incoming, allow outgoing
+- **fail2ban** — sshd jail (30min ban after 3 failures)
+- **sysctl** — kptr_restrict, dmesg_restrict, tcp_syncookies, rp_filter
+- **SSH keys** — ED25519 with passphrase (no empty -N), stored in `~/.ssh/`
+- **No hardcoded credentials** — all generated via `generate_random_password`
+- **safe_download** — SHA256 verification, retry logic, local execution
+- **credential files** — `chmod 600`, stored in `~/.config/pop-os-setup/`
 
-### GPU
+---
 
-```bash
-nvidia-smi
-# Expected: table showing GPU name, driver version, CUDA version
-
-nvidia-smi --query-gpu=name,driver_version,utilization.gpu --format=csv
-```
-
-### Container Runtime
-
-```bash
-docker ps
-docker run --rm --gpus all nvidia/cuda:12.4-base nvidia-smi
-```
-
-### Kubernetes
+## 📋 Makefile
 
 ```bash
-kubectl get nodes
-# Expected: one or more nodes showing Ready
-
-kubectl get pods -A
-# Expected: all pods Running
-
-kubectl top nodes
-# Expected: CPU/memory usage
-```
-
-### Tailscale VPN
-
-```bash
-tailscale status
-# Expected: shows this node + peered nodes
-
-tailscale ping <node-name>
-# Expected: ping reply
-```
-
-### Ceph Storage
-
-```bash
-kubectl get storageclass
-# Expected: ceph-blockpool or similar
-
-kubectl ceph status
-# Expected: cluster health: HEALTH_OK
-```
-
-### Monitoring Stack
-
-```bash
-kubectl get pods -n monitoring
-# Expected: prometheus, grafana, loki all Running
-
-curl -s localhost:3000/login | head -5
-# Grafana should respond
-```
-
-### Backup Verification
-
-```bash
-velero backup get
-# Expected: shows backups with Completed status
-
-kubectl get backups -A
+make help              # Show all targets
+make verify            # Full check: lint + check-stages + security + docs
+make lint              # bash -n + shellcheck -S warning
+make check-stages      # Stage files + function definitions
+make security-check    # Scan for RCE/credential patterns
+make docs              # Validate documentation
+make stage-list        # List all stage files with size
+make integration-tests  # Run test suite
+make run               # Execute pop-os-setup.sh as root
+make clean             # Remove log files
 ```
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Script fails at Stage 1 (Preflight)
-
 ```bash
-# Check network
-ping -c 3 8.8.8.8
+# Re-run from specific stage
+sudo bash pop-os-setup.sh --stage 10
 
-# Check GPU visibility
-ls /dev/nvidia*
+# Check stage output
+tail -50 /var/log/pop-os-setup.log
 
-# Check OS version
-cat /etc/os-release | grep PRETTY_NAME
-```
+# Verify stage syntax
+bash -n stages/stage10_hardening.sh
 
-### NVIDIA driver not loaded
-
-```bash
-# Check kernel module
-lsmod | grep nvidia
-
-# Reload module
-sudo modprobe nvidia
-sudo nvidia-smi
-
-# If still failing
-sudo apt install --reinstall nvidia-driver-550
-sudo reboot
-```
-
-### k3s install fails
-
-```bash
-# Check swap
-swapon --show
-# If swap is 0, create one:
-sudo fallocate -l 2G /swapfile
-sudo chmod 600 /swapfile
-sudo mkswap /swapfile
-sudo swapon /swapfile
-
-# Check ports
-sudo ss -tlnp | grep -E '6443|2379|2380'
-```
-
-### Longhorn not provisioning
-
-```bash
-kubectl get pods -n longhorn-system
-# If Longhorn manager is CrashLoopBackOff:
-kubectl describe pod -n longhorn-system manager-xxx
-
-# Check mtab
-cat /proc/mounts | grep -E 'nfs|cifs|fuse'
-```
-
-### Tailscale not connecting
-
-```bash
-tailscale status --verbose
-# Check ACL: https://login.tailscale.com/admin/acls
-tailscale up --reset
-```
-
-### Velero backup stuck
-
-```bash
-kubectl get pod -n velero
-velero backup describe <backup-name> --details
-velero restore describe <restore-name> --details
-```
-
-### Recovery (total)
-
-```bash
-# Re-run script from stage X (replace X with stage number)
-# Script is idempotent — safe to re-run from any stage
-
-# Or run single stage directly
-sudo bash pop-os-setup-v5.sh --stage 12
-
-# Force reinstall (remove config first)
-sudo rm -rf ~/.config/plasma* ~/.config/kwin*
+# Run integration tests
+make integration-tests
 ```
 
 ---
 
-## 📁 File Structure
+## ⚠️ Failure Conditions
 
-```
-pop-os-setup/
-├── pop-os-setup-v5.sh   # Main script (stable, v5.0.0)
-├── README.md            # This file
-└── Pop_OS_KDE_NVIDIA_Guide.md  # Manual installation guide
-```
-
----
-
-## 🔐 Security Notes
-
-- Script enables UFW with \`deny incoming\` / \`allow outgoing\`
-- fail2ban installed with SSH jail
-- AppArmor enforced
-- Tailscale uses WireGuard (AES-256-GCM)
-- Disk encryption recommended (enable during OS install)
-- SSH keys + sudo access only (no password-less root)
+| Symptom | Action |
+|---------|--------|
+| `nvidia-smi` fails after stage 9 | Check Secure Boot, reinstall driver |
+| k3s fails to start | Verify ports 6443, 2379-2380 are open |
+| Ceph HEALTH_ERR | Do not proceed; fix storage first |
+| Docker not running | `sudo systemctl enable --now docker` |
 
 ---
 
-## ⚠️ Failure Conditions — When to Abort
-
-| Condition | Action |
-|-----------|--------|
-| \`nvidia-smi\` fails after Stage 3 | Abort, check GPU |
-| No network after Stage 1 | Abort, check DHCP/NIC |
-| k3s fails to join | Check firewall ports 6443, 2379-2380 |
-| Ceph health: \`HEALTH_ERR\` | Do not proceed, fix first |
-| Disk encryption unlock fails | Requires reinstall |
-
----
-
-## 📚 Related Docs
-
-| Document | Purpose |
-|----------|---------|
-| \`Pop_OS_KDE_NVIDIA_Guide.md\` | Step-by-step manual install (no script) |
-| \`home-cluster-iac/README.md\` | Home lab Terraform + Ansible |
-| \`AstroFinSentinelV5/README.md\` | AI trading system |
-
----
-
-*Generated 2026-04-18 — mahaasur13-sys / asurdev.zo.computer*
+*pop-os-setup v3.0.0 — mahaasur13-sys / asurdev.zo.computer*
