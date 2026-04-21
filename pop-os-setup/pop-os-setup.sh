@@ -1,164 +1,165 @@
 #!/bin/bash
-#===============================================================================
-# pop-os-setup.sh — Entry Controller (v4.0.0)
-#===============================================================================
-# Deterministic, fail-safe, manifest-driven setup pipeline.
-# Usage: sudo ./pop-os-setup.sh [--profile NAME] [--dry-run] [--stage N]
-#===============================================================================
+#=======================================================================
+# pop-os-setup.sh — v4.1 Entry Controller
+#=======================================================================
+# DAG-based orchestrator with state persistence
+# Single source of truth: MANIFEST.json
+#=======================================================================
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export SCRIPT_DIR
-export POP_OS_SETUP_DIR="$SCRIPT_DIR"
+readonly SCRIPT_VERSION="4.1.0"
+readonly SCRIPT_NAME="pop-os-setup"
+readonly LOGDIR="${LOGDIR:-/var/log/${SCRIPT_NAME}}"
+readonly STATE_DIR="${STATE_DIR:-/var/lib/${SCRIPT_NAME}}"
+readonly STATE_FILE="${STATE_DIR}/state.json"
 
-readonly VERSION="4.0.0"
-readonly LOGDIR="/var/log/pop-os-setup"
-readonly MANIFEST="${SCRIPT_DIR}/MANIFEST.json"
+# ─── LOGGING ────────────────────────────────────────────────────────────────
+_log() {
+    local level="$1"; shift
+    echo "[$level] [$(date '+%H:%M:%S')] $*" >&2
+    [[ -d "$LOGDIR" ]] && echo "[$level] [$(date '+%H:%M:%S')] $*" >> "${LOGDIR}/$(date '+%Y-%m-%d').log"
+}
+ok()   { _log "OK" "$@"; }
+info() { _log "INFO" "$@"; }
+warn() { _log "WARN" "$@"; }
+err()  { _log "ERROR" "$@"; }
+step() { _log "STAGE" "=$2= $1"; }
 
-# ─── LOGGING ─────────────────────────────────────────────────────────────────
-ensure_dir() { mkdir -p "$1" 2>/dev/null || true; }
-ensure_dir "$LOGDIR"
+# ─── USAGE ───────────────────────────────────────────────────────────────────
+usage() {
+    cat << USAGE_EOF
+Usage: sudo ${SCRIPT_NAME}.sh [OPTIONS]
 
-LOGFILE="${LOGDIR}/pop-os-setup-$(date +%Y-%m-%d_%H-%M-%S).log"
-exec > >(tee -a "$LOGFILE") 2>&1
-
-# ─── BOOTSTRAP PATH RESOLUTION ───────────────────────────────────────────────
-source "${SCRIPT_DIR}/lib/_path.sh"
-
-if [[ -z "${LIBDIR:-}" ]]; then
-    echo "FATAL: LIBDIR resolution failed"
-    echo "PWD=$PWD BASH_SOURCE[0]=${BASH_SOURCE[0]:-}"
-    exit 1
-fi
-
-# ─── CLI PARSING ──────────────────────────────────────────────────────────────
-DRY_RUN=0
-SELECTED_STAGE=""
-PROFILE="${PROFILE:-workstation}"
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --dry-run)    DRY_RUN=1 ;;
-        --stage)      SELECTED_STAGE="$2"; shift ;;
-        --profile)    PROFILE="$2"; shift ;;
-        --version)    echo "pop-os-setup v$VERSION"; exit 0 ;;
-        --help)
-            echo "pop-os-setup v$VERSION"
-            echo "Usage: $0 [--profile NAME] [--dry-run] [--stage N]"
-            echo "Profiles: workstation, ai-dev, full"
-            exit 0
-            ;;
-    esac
-    shift
-done
-
-# ─── MANIFEST VALIDATION ──────────────────────────────────────────────────────
-if [[ ! -f "$MANIFEST" ]]; then
-    echo "FATAL: MANIFEST.json not found at $MANIFEST"
-    exit 1
-fi
-
-command -v jq &>/dev/null || {
-    echo "FATAL: jq is required (apt install jq)"
-    exit 1
+Options:
+  --profile <name>   Profile to run (default: workstation)
+  --dry-run          Show execution plan without running
+  --list-stages      List all stages from MANIFEST
+  --list-profiles    List available profiles
+  --resume           Resume from previous state
+  --retry <stage>    Re-run specific stage
+  --reset            Reset all state (start fresh)
+  --version          Show version
+  --help             Show this help
+USAGE_EOF
 }
 
-# ─── CORE LIBS ────────────────────────────────────────────────────────────────
-source "${LIBDIR}/bootstrap.sh"
+# ─── CLI PARSER ──────────────────────────────────────────────────────────────
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --profile)   export PROFILE="$2"; shift 2 ;;
+            --dry-run)   export DRY_RUN=1 ;;
+            --resume)    export RESUME=1 ;;
+            --reset)     export RESET_STATE=1 ;;
+            --retry)     export RETRY_STAGE="$2"; shift 2 ;;
+            --list-stages)  list_stages; exit 0 ;;
+            --list-profiles) list_profiles; exit 0 ;;
+            --version)  echo "${SCRIPT_VERSION}"; exit 0 ;;
+            --help)     usage; exit 0 ;;
+            *)          usage; exit 1 ;;
+        esac
+        shift
+    done
+}
 
-# ─── PROFILE LOADING ──────────────────────────────────────────────────────────
+# ─── BOOTSTRAP ─────────────────────────────────────────────────────────────
+bootstrap() {
+    if [[ -z "${BASEDIR:-}" ]]; then
+        BASEDIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+        export BASEDIR
+    fi
+
+    source "${BASEDIR}/lib/_path.sh" || { err "lib/_path.sh not found"; exit 1; }
+    source "${LIBDIR}/_dag.sh"       || { err "lib/_dag.sh not found"; exit 1; }
+    source "${LIBDIR}/_state.sh"     || { err "lib/_state.sh not found"; exit 1; }
+    source "${LIBDIR}/logging.sh"     2>/dev/null || true
+    source "${LIBDIR}/utils.sh"      2>/dev/null || true
+}
+
+# ─── PROFILE LOADER ──────────────────────────────────────────────────────────
 load_profile() {
-    local profile_name="${1:-workstation}"
-    local profile_json
-    profile_json=$(jq -r ".profiles.\"${profile_name}\" // empty" "$MANIFEST")
+    local profile="${PROFILE:-${1:-workstation}}"
+    local profile_file="${BASEDIR}/profiles/${profile}.sh"
 
-    if [[ -z "$profile_json" ]]; then
-        echo "FATAL: Unknown profile: $profile_name"
-        exit 1
+    if [[ ! -f "$profile_file" ]]; then
+        err "Profile not found: $profile_file"
+        return 1
     fi
 
-    # Export ENABLE_* flags
-    while IFS== read -r flag value; do
-        [[ -z "$flag" ]] && continue
-        export "$flag"="$value"
-    done < <(jq -r '.flags | to_entries | .[] | "\(.key)=\(.value)"' <<< "$profile_json")
-
-    log "Profile applied: $profile_name"
+    info "Loading profile: $profile"
+    source "$profile_file"
+    export PROFILE="$profile"
 }
 
-load_profile "$PROFILE"
+# ─── MAIN ────────────────────────────────────────────────────────────────────
+main() {
+    mkdir -p "$LOGDIR" 2>/dev/null || true
+    info "pop-os-setup v${SCRIPT_VERSION} starting"
 
-# ─── STAGE RUNNER ─────────────────────────────────────────────────────────────
-run_stage() {
-    local stage_file="$1"
-    local stage_name
-    stage_name=$(basename "$stage_file" .sh)
+    bootstrap || exit 1
 
-    echo ""
-    log_sep
-    step "$stage_name" ""
-
-    if [[ ! -f "$stage_file" ]]; then
-        err "Stage file not found: $stage_file"
-        return 1
+    if [[ -z "${PROFILE:-}" ]]; then
+        PROFILE="workstation"
     fi
 
-    source "$stage_file"
+    load_profile || exit 1
 
-    # Call bootstrap (mandatory per stage contract)
-    bootstrap_stage || {
-        err "Bootstrap failed for $stage_name"
-        return 1
+    [[ "${RESET_STATE:-}" == "1" ]] && {
+        rm -f "$STATE_FILE"
+        ok "State reset complete"
+        exit 0
     }
 
-    # Detect stage function
-    local func_name=""
-    func_name=$(grep -m1 "^stage_[a-z_]*()" "$stage_file" 2>/dev/null | sed 's/()//; s/stage_//')
+    [[ "${DRY_RUN:-}" == "1" ]] && {
+        load_state 2>/dev/null || true
+        load_manifest || exit 1
+        build_dag "$PROFILE" || exit 1
+        ok "DRY RUN — profile: $PROFILE"
+        for stage in $(get_topo_order); do
+            echo "  $stage  [$(get_state "$stage" || echo 'pending')]"
+        done
+        exit 0
+    }
 
-    if [[ -z "$func_name" ]]; then
-        err "No stage function found in $stage_file"
-        return 1
-    fi
+    load_state || true
 
-    if [[ $DRY_RUN -eq 1 ]]; then
-        ok "[DRY-RUN] Would run: ${func_name}()"
-        return 0
-    fi
+    load_manifest || {
+        err "Failed to load MANIFEST.json"
+        exit 1
+    }
 
-    # Execute
-    "stage_${func_name}"
+    build_dag "$PROFILE" || {
+        err "DAG build failed (cycle?)"
+        exit 1
+    }
+
+    local skipped=0 executed=0 failed=0
+    for stage in $(get_topo_order); do
+        local status
+        status="$(get_state "$stage")"
+
+        if [[ "$status" == "$LC_DONE" ]] || [[ "$status" == "$LC_SKIPPED" ]]; then
+            ((skipped++))
+            continue
+        fi
+
+        step "$(echo "${_DAG_NODES[$stage]}" | jq -r '.name')" "$stage"
+
+        if run_stage "$stage"; then
+            ((executed++))
+        else
+            ((failed++))
+            warn "Stage $stage failed"
+        fi
+    done
+
+    echo ""
+    echo "============================================"
+    echo "  pop-os-setup v${SCRIPT_VERSION} — DONE"
+    echo "  Executed: $executed  Skipped: $skipped  Failed: $failed"
+    echo "============================================"
 }
 
-# ─── MAIN EXECUTION LOOP ─────────────────────────────────────────────────────
-log "pop-os-setup v$VERSION — starting (profile: $PROFILE, dry-run: $DRY_RUN)"
-
-if [[ -n "$SELECTED_STAGE" ]]; then
-    # Single stage mode
-    local stage_file
-    stage_file=$(jq -r ".stages[] | select(.id == $SELECTED_STAGE) | .file" "$MANIFEST")
-    if [[ -z "$stage_file" || "$stage_file" == "null" ]]; then
-        err "Stage $SELECTED_STAGE not found in MANIFEST"
-        exit 1
-    fi
-    run_stage "${SCRIPT_DIR}/${stage_file}"
-else
-    # Full pipeline — ordered by stage.id
-    while IFS= read -r stage_file; do
-        [[ -z "$stage_file" ]] && continue
-        run_stage "${SCRIPT_DIR}/${stage_file}" || {
-            err "Stage failed: $stage_file"
-            echo "[R]etry [S]kip [A]bort: "
-            read -r ans || true
-            case "$ans" in
-                R|r) continue ;;
-                S|s) ok "Skipping..." ;;
-                *)   exit 1 ;;
-            esac
-        }
-    done < <(jq -r '.stages | sort_by(.id) | .[].file' "$MANIFEST")
-fi
-
-log_sep
-ok "pop-os-setup v$VERSION — ALL DONE!"
-log "Log: $LOGFILE"
+parse_args "$@"
+main
