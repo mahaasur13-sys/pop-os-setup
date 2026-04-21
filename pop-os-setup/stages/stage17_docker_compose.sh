@@ -1,85 +1,100 @@
 #!/bin/bash
 #===============================================================================
-# Stage 17 — Docker Compose v2 + Portainer
+# Stage 17 — Docker Compose + Portainer (v4.0.0)
 #===============================================================================
 # Профиль: workstation, ai-dev, full
-# Использует: install_docker_compose_safe() и install_portainer_safe() из lib/installer.sh
-# Генерирует случайный пароль для Portainer
+# Контракт: requires docker_ready, provides compose_ready + portainer_ready
 #===============================================================================
 
-# Защита от повторного sourcing
-[[ "${_STAGE_SOURCED:-}" != "yes" ]] && {
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    LIBDIR="${SCRIPT_DIR}/lib"
-}
+[[ "${_STAGE_SOURCED:-}" == "yes" ]] && return 0
+_STAGE_SOURCED=yes
 
-source "${LIBDIR}/logging.sh"
-source "${LIBDIR}/utils.sh"
-source "${LIBDIR}/installer.sh"
-
+# ─── STAGE FUNCTION ──────────────────────────────────────────────────────────
 stage_docker_compose() {
-    step "DOCKER COMPOSE v2 + PORTAINER" "17"
+    step "DOCKER COMPOSE + PORTAINER" "17"
 
-    # Проверка флага из профиля
-    if [[ "${ENABLE_DOCKER:-0}" != "1" ]]; then
-        ok "Docker Compose & Portainer skipped (ENABLE_DOCKER=0)"
+    # 1. Check flag FIRST (idempotent)
+    if ! skip_if_disabled "DOCKER_COMPOSE"; then
         return 0
     fi
 
-    # Проверка, что Docker установлен
-    if ! command_exists docker; then
-        err "Docker is not installed. Please run stage 07 first."
+    # 2. Load installer (only now — after flag check)
+    if ! load_installer docker; then
+        err "Failed to load docker installer module"
         return 1
     fi
 
-    # 1. Установка Docker Compose v2
-    log "Installing Docker Compose v2..."
-    if install_docker_compose_safe; then
-        ok "Docker Compose v2 installed successfully"
+    # 3. Idempotency check
+    if is_installed "docker" && docker compose version &>/dev/null 2>&1; then
+        ok "Docker Compose v2 already installed — skipping"
+        return 0
+    fi
+
+    # 4. Install Docker Engine (if needed)
+    install_docker_if_needed || {
+        err "Docker installation failed"
+        return 1
+    }
+
+    # 5. Install Docker Compose v2
+    install_docker_compose_if_needed || {
+        err "Docker Compose installation failed"
+        return 1
+    }
+
+    # 6. Docker post-install: add user to docker group
+    local target_user
+    target_user="$(get_target_user 2>/dev/null || echo 'root')"
+
+    if [[ "$target_user" != "root" ]] && ! groups "$target_user" 2>/dev/null | grep -qw docker; then
+        usermod -aG docker "$target_user" 2>/dev/null || true
+        ok "User ${target_user} added to docker group"
+    fi
+
+    # 7. Install Portainer (optional)
+    if [[ "${ENABLE_PORTAINER:-0}" == "1" ]]; then
+        install_portainer_if_needed || true
+    fi
+
+    # 8. Verify
+    if docker compose version &>/dev/null 2>&1; then
+        ok "Docker Compose $(docker compose version | awk '{print $3}') ready"
     else
-        err "Failed to install Docker Compose"
+        err "Docker Compose verification failed"
         return 1
     fi
 
-    # 2. Установка и запуск Portainer
-    log "Setting up Portainer..."
+    ok "Docker Compose stage complete"
+    return 0
+}
 
-    # Генерируем случайный пароль, если не задан через переменную окружения
-    local portainer_password="${PORTAINER_ADMIN_PASSWORD:-$(generate_random_password 20)}"
+# ─── INSTALLER HELPERS (inline, no external dependencies) ────────────────────
 
-    if install_portainer_safe "$portainer_password"; then
-        ok "Portainer installed and started on http://localhost:9000"
-        # Сохраняем пароль в удобном месте
-        local pw_file="${HOME}/.config/pop-os-setup/.portainer_password"
-        mkdir -p "${HOME}/.config/pop-os-setup"
-        echo "$portainer_password" > "$pw_file"
-        chmod 600 "$pw_file"
+install_portainer_if_needed() {
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^portainer$"; then
+        ok "Portainer already running"
+        return 2
+    fi
 
-        ok "Portainer admin password has been generated and saved to:"
-        ok "   ${pw_file}"
-        info "You can view the password later with: cat ${pw_file}"
+    log "Installing Portainer..."
+
+    docker volume create portainer_data &>/dev/null 2>&1 || true
+
+    if docker run -d \
+        --name portainer \
+        --restart=unless-stopped \
+        -p 9000:9000 \
+        -p 8000:8000 \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v portainer_data:/data \
+        portainer/portainer-ce:latest 2>/dev/null; then
+        ok "Portainer installed: http://localhost:9000"
     else
-        err "Failed to install Portainer"
+        warn "Portainer installation failed (continuing)"
         return 1
     fi
-
-    # Финальная проверка
-    if docker ps --format '{{.Names}}' | grep -q "^portainer$"; then
-        ok "Portainer container is running"
-    else
-        warn "Portainer container is not running. Check with: docker ps"
-    fi
-
-    # Полезные команды
-    info "Useful commands:"
-    info "   docker compose version"
-    info "   docker ps | grep portainer"
-    info "   cat ~/.config/pop-os-setup/.portainer_password"
 
     return 0
 }
 
-# Для совместимости со старым вызовом
-stage17_docker_compose() {
-    stage_docker_compose "$@"
-}
+stage17_docker_compose() { stage_docker_compose "$@"; }

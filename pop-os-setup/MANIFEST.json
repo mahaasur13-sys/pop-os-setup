@@ -1,0 +1,252 @@
+{
+  "version": "4.0.0",
+  "schema": "1.0",
+  "description": "pop-os-setup v4.0 declarative execution contract",
+
+  "execution": {
+    "mode": "strict",
+    "fail_fast": true,
+    "idempotent": true,
+    "manifest_required": true
+  },
+
+  "libraries": {
+    "core": [
+      {"name": "logging",   "file": "lib/logging.sh",   "required": true},
+      {"name": "utils",     "file": "lib/utils.sh",     "required": true},
+      {"name": "profiles",  "file": "lib/profiles.sh",  "required": true},
+      {"name": "bootstrap", "file": "lib/bootstrap.sh", "required": true}
+    ],
+    "installer": [
+      {"name": "_shared",   "file": "lib/installer/_shared.sh"},
+      {"name": "docker",    "file": "lib/installer/docker.sh"},
+      {"name": "neovim",    "file": "lib/installer/neovim.sh"},
+      {"name": "k8s",       "file": "lib/installer/k8s.sh"},
+      {"name": "nvidia",    "file": "lib/installer/nvidia.sh"},
+      {"name": "tailscale", "file": "lib/installer/tailscale.sh"},
+      {"name": "zsh",       "file": "lib/installer/zsh.sh"},
+      {"name": "hardening", "file": "lib/installer/hardening.sh"}
+    ]
+  },
+
+  "stages": [
+    {
+      "id": 1,
+      "name": "preflight",
+      "file": "stages/stage01_preflight.sh",
+      "requires": [],
+      "provides": ["structure_valid", "network_ok", "sudo_ok"],
+      "flags": ["ENABLE_PREFLIGHT"]
+    },
+    {
+      "id": 2,
+      "name": "system_update",
+      "file": "stages/stage02_update.sh",
+      "requires": ["structure_valid"],
+      "provides": ["system_updated"],
+      "flags": ["ENABLE_UPDATE"]
+    },
+    {
+      "id": 3,
+      "name": "nvidia",
+      "file": "stages/stage03_nvidia.sh",
+      "requires": ["system_updated"],
+      "provides": ["gpu_ready", "nvml_stable"],
+      "flags": ["ENABLE_NVIDIA"]
+    },
+    {
+      "id": 4,
+      "name": "power",
+      "file": "stages/stage04_power.sh",
+      "requires": ["gpu_ready"],
+      "provides": ["power_profiled"],
+      "flags": ["ENABLE_POWER"]
+    },
+    {
+      "id": 5,
+      "name": "zsh",
+      "file": "stages/stage05_zsh.sh",
+      "requires": ["system_updated"],
+      "provides": ["zsh_ready"],
+      "flags": ["ENABLE_ZSH"]
+    },
+    {
+      "id": 6,
+      "name": "kde",
+      "file": "stages/stage06_kde.sh",
+      "requires": ["system_updated"],
+      "provides": ["kde_ready"],
+      "flags": ["ENABLE_KDE"]
+    },
+    {
+      "id": 7,
+      "name": "docker",
+      "file": "stages/stage07_docker.sh",
+      "requires": ["system_updated"],
+      "provides": ["docker_ready"],
+      "flags": ["ENABLE_DOCKER"]
+    },
+    {
+      "id": 8,
+      "name": "python_ai",
+      "file": "stages/stage08_python_ai.sh",
+      "requires": ["system_updated"],
+      "provides": ["python_ai_ready"],
+      "flags": ["ENABLE_PYTHON_AI"]
+    },
+    {
+      "id": 9,
+      "name": "cuda",
+      "file": "stages/stage09_cuda.sh",
+      "requires": ["gpu_ready"],
+      "provides": ["cuda_ready"],
+      "flags": ["ENABLE_CUDA"]
+    },
+    {
+      "id": 10,
+      "name": "hardening",
+      "file": "stages/stage10_hardening.sh",
+      "requires": ["system_updated"],
+      "provides": ["hardened"],
+      "flags": ["ENABLE_HARDEN"]
+    },
+    {
+      "id": 13,
+      "name": "tailscale",
+      "file": "stages/stage13_tailscale.sh",
+      "requires": ["system_updated"],
+      "provides": ["vpn_ready"],
+      "flags": ["ENABLE_TAILSCALE"]
+    },
+    {
+      "id": 16,
+      "name": "power_gpu",
+      "file": "stages/stage16_power.sh",
+      "requires": ["gpu_ready"],
+      "provides": ["gpu_power_capped"],
+      "flags": ["ENABLE_POWER"]
+    },
+    {
+      "id": 17,
+      "name": "docker_compose",
+      "file": "stages/stage17_docker_compose.sh",
+      "requires": ["docker_ready"],
+      "provides": ["compose_ready", "portainer_ready"],
+      "flags": ["ENABLE_DOCKER_COMPOSE"]
+    },
+    {
+      "id": 21,
+      "name": "cron",
+      "file": "stages/stage21_cron.sh",
+      "requires": [],
+      "provides": ["cron_configured"],
+      "flags": ["ENABLE_CRON"]
+    },
+    {
+      "id": 22,
+      "name": "neovim",
+      "file": "stages/stage22_neovim.sh",
+      "requires": [],
+      "provides": ["neovim_ready"],
+      "flags": ["ENABLE_NEOVIM"]
+    },
+    {
+      "id": 23,
+      "name": "notifications",
+      "file": "stages/stage23_notifications.sh",
+      "requires": ["gpu_ready"],
+      "provides": ["notifications_ready"],
+      "flags": ["ENABLE_NOTIFICATIONS"]
+    },
+    {
+      "id": 24,
+      "name": "ssh_gpg",
+      "file": "stages/stage24_ssh_gpg.sh",
+      "requires": [],
+      "provides": ["ssh_gpg_ready"],
+      "flags": ["ENABLE_SSH"]
+    },
+    {
+      "id": 25,
+      "name": "backup",
+      "file": "stages/stage25_backup.sh",
+      "requires": [],
+      "provides": ["backup_ready"],
+      "flags": ["ENABLE_BACKUP"]
+    },
+    {
+      "id": 26,
+      "name": "final",
+      "file": "stages/stage26_final.sh",
+      "requires": [],
+      "provides": ["final_verified"],
+      "flags": []
+    }
+  ],
+
+  "profiles": {
+    "workstation": {
+      "stages": [1, 2, 5, 6, 7, 8, 10, 17, 21, 22, 24, 25, 26],
+      "flags": {
+        "ENABLE_PREFLIGHT": 1,
+        "ENABLE_UPDATE": 1,
+        "ENABLE_ZSH": 1,
+        "ENABLE_KDE": 1,
+        "ENABLE_DOCKER": 1,
+        "ENABLE_PYTHON_AI": 1,
+        "ENABLE_HARDEN": 1,
+        "ENABLE_DOCKER_COMPOSE": 1,
+        "ENABLE_NEOVIM": 1,
+        "ENABLE_SSH": 0,
+        "ENABLE_BACKUP": 1,
+        "ENABLE_CRON": 1,
+        "ENABLE_NOTIFICATIONS": 1,
+        "ENABLE_NVIDIA": 0,
+        "ENABLE_CUDA": 0,
+        "ENABLE_TAILSCALE": 0
+      }
+    },
+    "ai-dev": {
+      "stages": [1, 2, 3, 5, 7, 8, 9, 10, 13, 17, 21, 22, 24, 25, 26],
+      "flags": {
+        "ENABLE_PREFLIGHT": 1,
+        "ENABLE_UPDATE": 1,
+        "ENABLE_NVIDIA": 1,
+        "ENABLE_ZSH": 1,
+        "ENABLE_DOCKER": 1,
+        "ENABLE_PYTHON_AI": 1,
+        "ENABLE_CUDA": 1,
+        "ENABLE_HARDEN": 1,
+        "ENABLE_TAILSCALE": 1,
+        "ENABLE_DOCKER_COMPOSE": 1,
+        "ENABLE_NEOVIM": 1,
+        "ENABLE_SSH": 1,
+        "ENABLE_BACKUP": 1,
+        "ENABLE_CRON": 1,
+        "ENABLE_NOTIFICATIONS": 1
+      }
+    },
+    "full": {
+      "stages": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 16, 17, 21, 22, 23, 24, 25, 26],
+      "flags": {
+        "ENABLE_PREFLIGHT": 1,
+        "ENABLE_UPDATE": 1,
+        "ENABLE_NVIDIA": 1,
+        "ENABLE_POWER": 1,
+        "ENABLE_ZSH": 1,
+        "ENABLE_KDE": 1,
+        "ENABLE_DOCKER": 1,
+        "ENABLE_PYTHON_AI": 1,
+        "ENABLE_CUDA": 1,
+        "ENABLE_HARDEN": 1,
+        "ENABLE_TAILSCALE": 1,
+        "ENABLE_DOCKER_COMPOSE": 1,
+        "ENABLE_NEOVIM": 1,
+        "ENABLE_SSH": 1,
+        "ENABLE_BACKUP": 1,
+        "ENABLE_CRON": 1,
+        "ENABLE_NOTIFICATIONS": 1
+      }
+    }
+  }
+}
