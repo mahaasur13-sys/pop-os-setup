@@ -1,33 +1,50 @@
 #!/usr/bin/env bash
 #===============================================
-# pop-os-setup.sh — Deterministic Intent-Driven Provisioning System v11.0
+# pop-os-setup.sh — Deterministic Intent-Driven Provisioning System v11.2
 # Three-layer truth: Intent → CESM → Physical → Reconciliation → Intent
 #===============================================
 set -euo pipefail
 
-readonly RUNTIME_VERSION="v11.0"
-readonly LOGDIR="${LOGDIR:-/var/log/pop-os-setup}"
+readonly RUNTIME_VERSION="v11.2"
+readonly LOG_CONTRACT_VERSION="v2"
 readonly STATEDIR="${STATEDIR:-/var/lib/pop-os-setup}"
 readonly INTENT_DIR="${INTENT_DIR:-./profiles}"
-readonly DRY_RUN="${DRY_RUN:-0}"
-readonly SELECTED_STAGE="${SELECTED_STAGE:-}"
-readonly PROFILE="${PROFILE:-full}"
 readonly POLICY="${POLICY:-intent-warn}"
 readonly MODE="${MODE:-full}"
+
+PROFILE="${PROFILE:-full}"
+DRY_RUN="${DRY_RUN:-0}"
+SELECTED_STAGE="${SELECTED_STAGE:-}"
+# LOG_MODE: deterministic | system | user — resolved BEFORE sourcing lib
+export LOG_MODE="${LOG_MODE:-deterministic}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIBDIR="${SCRIPT_DIR}/lib"
 STAGEDIR="${SCRIPT_DIR}/stages"
 PROFILEDIR="${SCRIPT_DIR}/profiles"
 
-mkdir -p "$LOGDIR" "$STATEDIR" 2>/dev/null || true
+# Source logging FIRST so LOGDIR is initialized from LOG_MODE
+# (get_log_target() needs SCRIPT_DIR which is set above)
+source "${LIBDIR}/logging.sh" 2>/dev/null || true
 
-# ─── Logging ───────────────────────────────────────────────────────────────
-log() { echo -e "[$(date '+%H:%M:%S')] $*" | tee -a "${LOGDIR}/setup.log"; }
+# Now LOGDIR is set — use it for state and mkdir
+mkdir -p "$STATEDIR" 2>/dev/null || true
+
+# ── Emit logging mode event ──────────────────────────────────────────────────
+_log_mode_event() {
+    local msg="$1"
+    local entry="[$(date -Iseconds)] log.mode.selected|${LOG_MODE}|logdir=${LOGDIR}|euid=${EUID:-$(id -u)}|dry=${DRY_RUN:-0}"
+    echo "$entry" >> "${LOGDIR}/setup.jsonl" 2>/dev/null || true
+}
+_log_mode_event "selected"
+
+# ── Logging (fallback if logging.sh not sourced) ─────────────────────────────
+: "${LOGDIR:=${SCRIPT_DIR}/logs}"
+log()  { echo -e "[$(date '+%H:%M:%S')] $*" | tee -a "${LOGDIR}/setup.log" 2>/dev/null || echo -e "[$(date '+%H:%M:%S')] $*"; }
 step() { log ""; log "══ $1 ══ [Stage $2]"; }
-ok() { log "[OK]  $*"; }
+ok()   { log "[OK]  $*"; }
 warn() { log "[WARN] $*"; }
-err() { log "[ERR]  $*" >&2; }
+err()  { echo -e "[$(date '+%H:%M:%S')] [ERR]  $*" >&2; }
 
 # ─── Argument parsing ──────────────────────────────────────────────────────
 show_usage() {
@@ -72,6 +89,14 @@ while [[ $# -gt 0 ]]; do
         --stage) SELECTED_STAGE="${2#0}"; shift 2 ;;
         --intent-dir) INTENT_DIR="$2"; shift 2 ;;
         --help|-h) show_usage; exit 0 ;;
+        --log-mode)
+            LOG_MODE="$2"; export LOG_MODE
+            case "$LOG_MODE" in
+                deterministic|system|user) log "[INFO] LOG_MODE set: $LOG_MODE" ;;
+                *) warn "LOG_MODE must be: deterministic|system|user (defaulting to deterministic)"
+                     LOG_MODE="deterministic"; export LOG_MODE ;;
+            esac
+            shift 2 ;;
         *) warn "Unknown option: $1"; shift ;;
     esac
 done
@@ -101,6 +126,24 @@ load_stage() {
     return 1
 }
 
+# ─── SANDBOX INTEGRITY GATE (v11.2) ─────────────────────────────────────────
+run_integrity_gate() {
+    local gate_script="${SCRIPT_DIR}/engine/sandbox_integrity_check.sh"
+
+    if [[ -f "$gate_script" ]]; then
+        log "🔒 [INTEGRITY GATE v11.2] Pre-execution verification..."
+        if ! bash "$gate_script"; then
+            err "❌ INTEGRITY GATE FAILED — aborting pipeline"
+            return 1
+        fi
+        log "✅ Integrity gate PASSED — proceeding"
+    else
+        warn "⚠ Integrity gate not found — skipping (not recommended)"
+    fi
+
+    return 0
+}
+
 # ─── Execution ────────────────────────────────────────────────────────────
 run_stage() {
     local num="$1"
@@ -108,7 +151,7 @@ run_stage() {
 
     step "$(printf '%02d' "$num")" "$num"
 
-    if [[ -n "${SELECTED_STAGE}" && "$SELECTED_STAGE" != "$num" ]]; then
+    if [[ -n "${SELECTED_STAGE}" && "${SELECTED_STAGE}" != "$num" ]]; then
         ok "Skipped (--stage filter)"
         return 0
     fi
@@ -132,14 +175,16 @@ run_stage() {
 }
 
 main() {
-    echo ""
-    echo "═══════════════════════════════════════"
-    echo "  pop-os-setup v${RUNTIME_VERSION}"
-    echo "  Profile: ${PROFILE}"
-    echo "  Mode: ${MODE}"
-    echo "  Policy: ${POLICY}"
-    echo "═══════════════════════════════════════"
-    echo ""
+    # dry-run skips integrity gate
+    if [[ "$DRY_RUN" != 1 ]]; then
+        if ! run_integrity_gate; then
+            echo ""
+            echo "═══════════════════════════════════════"
+            echo "  ❌ PIPELINE ABORTED — INTEGRITY GATE FAILED"
+            echo "═══════════════════════════════════════"
+            exit 1
+        fi
+    fi
 
     if [[ "$DRY_RUN" == 1 ]]; then
         ok "DRY-RUN MODE — no changes will be made"
