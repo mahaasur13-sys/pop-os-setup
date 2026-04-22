@@ -1,25 +1,38 @@
 #!/usr/bin/env bash
 #===============================================
-# pop-os-setup.sh v9.2 — Production Boot Entry
+# pop-os-setup.sh v9.3 — Production Boot Entry
 #===============================================
 # Modes: --list | --validate | --dry-run | --resume | --rollback | --full
 # SAFE_MODE blocks execution on validation/runtime failure.
 # All paths resolved via lib/runtime.sh
+# Build identity + pipeline fingerprint attached to every run.
 #===============================================
 
 set -euo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 # Load runtime (provides all paths, state, logging, trap)
-# NOTE: We don't source the whole runtime.sh for dry-run
-# because it auto-runs bootstrap(). Instead, we inline
-# the path resolution so --validate works without a full bootstrap.
 if [[ -f "${BASH_SOURCE[0]%/*}/lib/runtime.sh" ]]; then
     source "${BASH_SOURCE[0]%/*}/lib/runtime.sh"
 else
     echo "FATAL: lib/runtime.sh not found" >&2
     exit 1
 fi
+
+# ═══════════════════════════════════════════════════════════
+# BUILD IDENTITY DISPLAY (v9.3)
+# ═══════════════════════════════════════════════════════════
+
+show_build_identity() {
+    compute_pipeline_fingerprint "${PROFILE:-default}"
+    echo ""
+    echo "  pop-os-setup ${RUNTIME_VERSION}"
+    echo "  build:       ${BUILD_ID}"
+    echo "  branch:      ${BUILD_BRANCH}"
+    echo "  fingerprint: ${FINGERPRINT_SHORT}"
+    echo "  build time:  ${BUILD_TIME}"
+    echo ""
+}
 
 # ═══════════════════════════════════════════════════════════
 # ARGUMENT PARSING
@@ -30,12 +43,12 @@ usage() {
 Usage: sudo ./pop-os-setup.sh [MODE] [OPTIONS]
 
 Modes:
-  --list          Show all stages and current status
-  --validate      Pre-flight validation (syntax + deps + DAG)
-  --dry-run       Preview execution without changes
-  --resume        Resume from last failed stage
-  --rollback      Rollback last failed stage
-  --full          Run full pipeline (default)
+  --list      Show all stages and current status
+  --validate  Pre-flight validation (syntax + deps + DAG)
+  --dry-run   Preview execution without changes
+  --resume    Resume from last failed stage
+  --rollback  Rollback last failed stage
+  --full      Run full pipeline (default)
 
 Options:
   --profile NAME   Use profile (workstation|ai-dev|full|cluster)
@@ -46,8 +59,8 @@ Options:
 
 Examples:
   sudo ./pop-os-setup.sh                    # Full run
-  sudo ./pop-os-setup.sh --dry-run          # Preview
-  sudo ./pop-os-setup.sh --resume           # Recover
+  sudo ./pop-os-setup.sh --dry-run         # Preview
+  sudo ./pop-os-setup.sh --resume          # Recover
   sudo ./pop-os-setup.sh --validate         # Check system
 EOF
     exit 0
@@ -83,6 +96,9 @@ main() {
     log "═══════════════════════════════════════════"
     log "  pop-os-setup ${RUNTIME_VERSION} — Production Installer"
     log "═══════════════════════════════════════════"
+
+    show_build_identity
+
     log "  Mode:     $MODE"
     log "  Run ID:   $RUN_ID"
     log "  Profile:  ${PROFILE:-default}"
@@ -90,6 +106,12 @@ main() {
     log "  Safe:     ${SAFE_MODE:-0}"
     log "  Dry:      ${DRY_RUN:-0}"
     log "═══════════════════════════════════════════"
+
+    # Attach identity to run metadata (reproducibility layer)
+    if [[ -n "$RUN_ID" ]]; then
+        attach_run_identity "$RUN_ID" "${PROFILE:-default}" >/dev/null 2>&1 || true
+        log_execution_event "$RUN_ID" "pipeline_start" "" "info"
+    fi
 
     case "$MODE" in
         list)
@@ -150,10 +172,12 @@ main() {
                 log "  ✅ ALL DONE — pop-os-setup ${RUNTIME_VERSION}"
                 log "═══════════════════════════════════════════"
                 release_lock
+                [[ -n "$RUN_ID" ]] && log_execution_event "$RUN_ID" "pipeline_complete" "" "info"
                 exit 0
             else
                 err "Pipeline failed — run with --resume to recover"
                 err "SAFE_MODE enabled — use --list, --validate, --dry-run only"
+                [[ -n "$RUN_ID" ]] && log_execution_event "$RUN_ID" "pipeline_failed" "" "error"
                 release_lock
                 exit 1
             fi
@@ -170,5 +194,7 @@ trap 'release_lock 2>/dev/null || true' EXIT INT TERM
 
 MODE="full"
 PROFILE="${PROFILE:-}"
+RUN_ID="${RUN_ID:-$(generate_run_id)}"
+RECOVERY_POLICY="${RECOVERY_POLICY:-abort}"
 parse_args "$@"
 main

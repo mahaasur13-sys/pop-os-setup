@@ -1,528 +1,357 @@
 #!/usr/bin/env bash
 #===============================================
-# lib/runtime.sh v9.2 — Production Grade Runtime
+# lib/runtime.sh — pop-os-setup v9.3 Runtime Engine
+# Single source of truth for version, paths, state, identity.
 #===============================================
-# Single Source of Truth for all paths + execution engine.
-# Full idempotency, dry-run, checkpoint, rollback, fault isolation.
+# Version source: RUNTIME_VERSION — DO NOT hardcode elsewhere
 #===============================================
 
 [[ -n "${_RUNTIME_SOURCED:-}" ]] && return 0 || _RUNTIME_SOURCED=1
 
-# ═══════════════════════════════════════════════════════════
-# CONFIGURATION
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
+# VERSION (canonical source — single definition)
+# ═══════════════════════════════════════════════
 
-# Resolved paths (must work from any cwd)
-pushd "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && SCRIPT_ROOT="$(pwd)" && popd >/dev/null 2>&1
+readonly RUNTIME_VERSION="v9.3"
 
-readonly SCRIPT_ROOT="${SCRIPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-readonly LIBDIR="${SCRIPT_ROOT}/lib"
-readonly STAGEDIR="${SCRIPT_ROOT}/stages"
-readonly ENGINEDIR="${SCRIPT_ROOT}/engine"
-readonly STATE_DIR="${SCRIPT_ROOT}/state"
-readonly LOG_DIR="${SCRIPT_ROOT}/logs"
-readonly CHECKPOINT_DIR="${STATE_DIR}/checkpoints"
-readonly SNAPSHOT_DIR="${STATE_DIR}/snapshots"
-readonly LOCK_FILE="/var/lock/pop-os-setup.lock"
-readonly METADATA_FILE="${STATE_DIR}/.metadata"
+get_version() { echo "$RUNTIME_VERSION"; }
 
-# Runtime flags
-DRY_RUN="${DRY_RUN:-0}"
-SAFE_MODE="${SAFE_MODE:-0}"
-RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_$$}"
-RECOVERY_POLICY="${RECOVERY_POLICY:-abort}"  # abort | skip | retry
-VERBOSE="${VERBOSE:-0}"
+# ═══════════════════════════════════════════════
+# BUILD IDENTITY LAYER (v9.3 — immutable fingerprint)
+# ═══════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════
-# BOOTSTRAP — Load dependencies
-# ═══════════════════════════════════════════════════════════
+derive_build_identity() {
+    local script_dir="${1:-$PWD}"
 
-bootstrap() {
-    local errors=0
-
-    # Ensure state dirs
-    for d in "$STATE_DIR" "$CHECKPOINT_DIR" "$SNAPSHOT_DIR" "$LOG_DIR"; do
-        mkdir -p "$d" 2>/dev/null || {
-            echo "FATAL: Cannot create $d" >&2; ((errors++))
-        }
-    done
-
-    # Load logging
-    if [[ -f "${LIBDIR}/logging.sh" ]]; then
-        source "${LIBDIR}/logging.sh" || ((errors++))
+    # Git-based build identity
+    if [[ -d "$script_dir/.git" ]]; then
+        BUILD_ID=$(git -C "$script_dir" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        BUILD_TREE=$(git -C "$script_dir" rev-parse HEAD 2>/dev/null || echo "unknown")
+        BUILD_BRANCH=$(git -C "$script_dir" branch --show-current 2>/dev/null || echo "detached")
+        BUILD_TAGS=$(git -C "$script_dir" tag --points-at HEAD 2>/dev/null | tr '\n' ',' | sed 's/,$//')
     else
-        echo "FATAL: logging.sh not found at $LIBDIR" >&2; ((errors++))
+        BUILD_ID="no-git"
+        BUILD_TREE="no-git"
+        BUILD_BRANCH="none"
+        BUILD_TAGS=""
     fi
 
-    # Load utils
-    if [[ -f "${LIBDIR}/utils.sh" ]]; then
-        source "${LIBDIR}/utils.sh" || ((errors++))
-    else
-        echo "FATAL: utils.sh not found at $LIBDIR" >&2; ((errors++))
-    fi
+    BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    BUILD_EPOCH=$(date -u +%s)
 
-    ((errors == 0)) || {
-        echo "Bootstrap failed with $errors error(s)"
-        set_safe_mode
-        return 1
-    }
-
-    log "Bootstrap OK — RUN_ID=$RUN_ID"
-    return 0
+    readonly BUILD_ID BUILD_TREE BUILD_BRANCH BUILD_TAGS BUILD_TIME BUILD_EPOCH
 }
 
-# ═══════════════════════════════════════════════════════════
-# SAFE MODE — Restrict operations on failure
-# ═══════════════════════════════════════════════════════════
+derive_build_identity "${SCRIPT_DIR:-.}"
 
-set_safe_mode() {
-    export SAFE_MODE=1
-    log "SAFE_MODE enabled — only --list/--validate/--dry-run allowed"
+# ═══════════════════════════════════════════════
+# PIPELINE FINGERPRINT (v9.3 — order-sensitive hash)
+# Same input → identical fingerprint
+# ═══════════════════════════════════════════════
+
+compute_pipeline_fingerprint() {
+    local profile="${1:-default}"
+    local stages_list
+    local stage_hash
+
+    # Order-sensitive stage list hash
+    stages_list=$(find "$STAGEDIR" -maxdepth 1 -name 'stage*.sh' | sort | \
+                  xargs grep -h '^stage_[0-9a-z_]*()' 2>/dev/null | \
+                  sed 's/^[[:space:]]*//;s/().*//' | tr '\n' '|' | \
+                  cat 2>/dev/null)
+
+    stage_hash=$(printf '%s' "$stages_list" | sha256sum | awk '{print $1}')
+
+    # Runtime version
+    local ver_hash
+    ver_hash=$(printf '%s' "$RUNTIME_VERSION" | sha256sum | awk '{print $1}')
+
+    # Git commit
+    local git_hash
+    git_hash=$(printf '%s' "${BUILD_TREE:-unknown}" | sha256sum | awk '{print $1}')
+
+    # Profile
+    local prof_hash
+    prof_hash=$(printf '%s' "$profile" | sha256sum | awk '{print $1}')
+
+    # Combined fingerprint (order-sensitive)
+    PIPELINE_FINGERPRINT=$(printf '%s%s%s%s' "$stage_hash" "$ver_hash" "$git_hash" "$prof_hash" | sha256sum | awk '{print $1}')
+    readonly PIPELINE_FINGERPRINT
+
+    # Short form for display
+    FINGERPRINT_SHORT="${PIPELINE_FINGERPRINT:0:12}"
+    readonly FINGERPRINT_SHORT
 }
 
-is_safe_mode() {
-    [[ "${SAFE_MODE:-0}" == "1" ]]
+# ═══════════════════════════════════════════════
+# ATTACH IDENTITY TO RUN (v9.3)
+# Creates immutable run metadata
+# ═══════════════════════════════════════════════
+
+attach_run_identity() {
+    local run_id="$1"
+    local profile="${2:-default}"
+    local log_dir="${LOGDIR:-/var/log/pop-os-setup}"
+    local state_dir="${STATE_DIR:-/var/lib/pop-os-setup/state}"
+
+    ensure_dir "$log_dir" 2>/dev/null || log_dir="/tmp/pop-os-setup-logs-$$"
+    ensure_dir "$state_dir" 2>/dev/null || state_dir="/tmp/pop-os-setup-state-$$"
+
+    local meta_file="${state_dir}/run_${run_id}.meta.json"
+    local fingerprint
+    compute_pipeline_fingerprint "$profile"
+    fingerprint="$PIPELINE_FINGERPRINT"
+
+    # Build identity object (attached to every run)
+    cat > "$meta_file" << EOF
+{
+  "run_id": "$run_id",
+  "version": "$(get_version)",
+  "build_id": "${BUILD_ID}",
+  "build_tree": "${BUILD_TREE}",
+  "build_branch": "${BUILD_BRANCH}",
+  "build_tags": "${BUILD_TAGS}",
+  "build_time": "${BUILD_TIME}",
+  "build_epoch": "${BUILD_EPOCH}",
+  "profile": "${profile}",
+  "fingerprint": "${fingerprint}",
+  "fingerprint_short": "${FINGERPRINT_SHORT}",
+  "stages_count": $(find "$STAGEDIR" -maxdepth 1 -name 'stage*.sh' 2>/dev/null | wc -l),
+  "runtime_version": "${RUNTIME_VERSION}",
+  "hostname": "$(hostname 2>/dev/null || echo unknown)",
+  "user": "$(whoami 2>/dev/null || echo unknown)",
+  "os": "$(detect_os 2>/dev/null || echo unknown)"
+}
+EOF
+
+    echo "$meta_file"
 }
 
-check_safe_mode() {
-    if is_safe_mode; then
-        local cmd="${1:-}"
-        case "$cmd" in
-            --list|--validate|--dry-run|--help|-h) return 0 ;;
-            *)
-                err "SAFE_MODE: operation '$cmd' blocked"
-                err "Allowed: --list | --validate | --dry-run | --help"
-                return 1
-                ;;
-        esac
-    fi
-    return 0
-}
+# ═══════════════════════════════════════════════
+# PATH SETUP
+# ═══════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════
-# LOCK MANAGEMENT — Prevent concurrent runs
-# ═══════════════════════════════════════════════════════════
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly SCRIPT_DIR
 
-acquire_lock() {
-    local max_age="${1:-3600}"  # default 1h stale
+LIBDIR="${SCRIPT_DIR}/lib"
+ENGINEDIR="${SCRIPT_DIR}/engine"
+STAGEDIR="${SCRIPT_DIR}/stages"
+PROFILEDIR="${SCRIPT_DIR}/profiles"
+STATEDIR="${SCRIPT_DIR}/state"
+LOGDIR="${SCRIPT_DIR}/logs"
+readonly LIBDIR ENGINEDIR STAGEDIR PROFILEDIR STATEDIR LOGDIR
 
-    if [[ -f "$LOCK_FILE" ]]; then
-        local pid age
-        pid=$(cat "$LOCK_FILE" 2>/dev/null)
-        age=$(stat -c %Y "$LOCK_FILE" 2>/dev/null || echo 0)
-        local now=$(date +%s)
+ensure_dir() { mkdir -p "$1" 2>/dev/null || true; }
+ensure_dir "$STATEDIR"
+ensure_dir "$LOGDIR"
 
-        if [[ -d "/proc/$pid" ]] && [[ $((now - age)) -lt $max_age ]]; then
-            err "Lock held by PID $pid (age=$((now - age))s)"
-            err "Remove lock: sudo rm $LOCK_FILE"
-            return 1
-        else
-            warn "Stale lock detected (PID=$pid, age=$((now - age))s) — removing"
-            rm -f "$LOCK_FILE"
-        fi
-    fi
+# ═══════════════════════════════════════════════
+# LOGGING (always sourcing from lib/)
+# ═══════════════════════════════════════════════
 
-    echo "$$" > "$LOCK_FILE"
-    log "Lock acquired: PID=$$"
-    return 0
-}
+for lib in logging utils; do
+    [[ -f "${LIBDIR}/${lib}.sh" ]] && source "${LIBDIR}/${lib}.sh" || true
+done
 
-release_lock() {
-    local pid
-    pid=$(cat "$LOCK_FILE" 2>/dev/null)
-    if [[ "$pid" == "$$" ]]; then
-        rm -f "$LOCK_FILE"
-        log "Lock released"
-    fi
-}
+step()  { echo "[$(date +'%H:%M:%S')] [STAGE $2] $1"; }
+ok()    { echo "[$(date +'%H:%M:%S')] [OK] $1"; }
+warn()  { echo "[$(date +'%H:%M:%S')] [WARN] $1"; }
+err()   { echo "[$(date +'%H:%M:%S')] [ERR] $1" >&2; }
+info()  { echo "[$(date +'%H:%M:%S')] [INFO] $1"; }
+log()   { echo "[$(date +'%H:%M:%S')] $1"; }
 
-# ═══════════════════════════════════════════════════════════
-# STATE MACHINE
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
+# RUN ID MANAGEMENT
+# ═══════════════════════════════════════════════
 
-# States: PENDING | RUNNING | SUCCESS | FAILED | SKIPPED | RETRYING
-
-get_stage_state() {
-    local stage="$1"
-    local state_file="${STATE_DIR}/${stage}.state"
-    if [[ -f "$state_file" ]]; then
-        cat "$state_file"
-    else
-        echo "PENDING"
-    fi
-}
-
-mark_stage() {
-    local stage="$1"
-    local state="$2"
-    local state_file="${STATE_DIR}/${stage}.state"
-    echo "$state" > "$state_file"
-    log "[${stage}] → $state"
-}
-
-is_done() {
-    local stage="$1"
-    local state
-    state=$(get_stage_state "$stage")
-    [[ "$state" == "SUCCESS" ]] || [[ "$state" == "SKIPPED" ]]
-}
-
-is_failed() {
-    local stage="$1"
-    [[ "$(get_stage_state "$stage")" == "FAILED" ]]
-}
-
-is_running() {
-    local stage="$1"
-    [[ "$(get_stage_state "$stage")" == "RUNNING" ]]
-}
-
-# ═══════════════════════════════════════════════════════════
-# DRY-RUN
-# ═══════════════════════════════════════════════════════════
-
-is_dry_run() {
-    [[ "${DRY_RUN:-0}" == "1" ]]
-}
-
-check_dry_run() {
-    if is_dry_run; then
-        log "[DRY-RUN] Would execute: $*"
-        return 1
-    fi
-    return 0
-}
-
-# ═══════════════════════════════════════════════════════════
-# RUN CMD — Dry-run aware executor
-# ═══════════════════════════════════════════════════════════
-
-run_cmd() {
-    local stage="$1"
-    shift
-    local cmd=("$@")
-    local start end duration
-
-    if is_dry_run; then
-        log "[DRY-RUN] $stage: ${cmd[*]}"
-        mark_stage "$stage" "SUCCESS"
-        return 0
-    fi
-
-    mark_stage "$stage" "RUNNING"
-    log "[$stage] EXEC: ${cmd[*]}"
-    start=$(date +%s%3N)
-
-    if "${cmd[@]}" 2>&1 | tee -a "${LOG_DIR}/${stage}.log"; then
-        end=$(date +%s%3N)
-        duration=$((end - start))
-        log "[$stage] DONE (${duration}ms)"
-        mark_stage "$stage" "SUCCESS"
-        _emit_event "$stage" "SUCCESS" "$duration"
-        return 0
-    else
-        end=$(date +%s%3N)
-        duration=$((end - start))
-        log "[$stage] FAILED (${duration}ms)"
-        mark_stage "$stage" "FAILED"
-        _emit_event "$stage" "FAILED" "$duration"
-        return 1
-    fi
-}
-
-# ═══════════════════════════════════════════════════════════
-# OBSERVABILITY — JSONL structured logs
-# ═══════════════════════════════════════════════════════════
-
-readonly RUN_LOG="${LOG_DIR}/run_${RUN_ID}.jsonl"
-
-_emit_event() {
-    local stage="$1"
-    local status="$2"
-    local duration_ms="${3:-0}"
+generate_run_id() {
+    local prefix="${1:-run}"
     local timestamp
-    timestamp=$(date -Iseconds)
-
-    printf '%s\n' "{\"run_id\":\"${RUN_ID}\",\"stage\":\"${stage}\",\"status\":\"${status}\",\"timestamp\":\"${timestamp}\",\"duration_ms\":${duration_ms}}" >> "$RUN_LOG"
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    local rand
+    rand=$(od -An -tx1 -N4 /dev/urandom 2>/dev/null | tr -d ' ' | head -c 6)
+    echo "${prefix}_${timestamp}_${rand}"
 }
 
-get_run_log() {
-    echo "$RUN_LOG"
-}
+# ═══════════════════════════════════════════════
+# OS DETECTION
+# ═══════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════
-# CHECKPOINT SYSTEM
-# ═══════════════════════════════════════════════════════════
-
-save_checkpoint() {
-    local stage="$1"
-    local checkpoint="${CHECKPOINT_DIR}/${stage}.checkpoint"
-    local metadata="${CHECKPOINT_DIR}/${stage}.meta"
-
-    if is_dry_run; then
-        log "[DRY-RUN] save_checkpoint: $stage"
-        return 0
-    fi
-
-    local ts
-    ts=$(date -Iseconds)
-    echo "{\"stage\":\"$stage\",\"timestamp\":\"$ts\",\"run_id\":\"$RUN_ID\"}" > "$checkpoint"
-    log "[$stage] checkpoint saved"
-}
-
-restore_checkpoint() {
-    local stage="$1"
-    local checkpoint="${CHECKPOINT_DIR}/${stage}.checkpoint"
-
-    if [[ -f "$checkpoint" ]]; then
-        log "[$stage] checkpoint found — restore context"
-        cat "$checkpoint"
-        return 0
+detect_os() {
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        echo "${PRETTY_NAME:-unknown}"
     else
-        err "[$stage] no checkpoint found"
-        return 1
+        echo "unknown"
     fi
 }
 
-get_last_success() {
-    local stage_num="${1:-1}"
+is_pop_os() { grep -qi 'pop_os\|pop!_os' /etc/os-release 2>/dev/null; }
 
-    for ((i=stage_num-1; i>=1; i--)); do
-        local name
-        name=$(get_stage_name "$i")
-        if is_done "$name"; then
-            echo "$name"
-            return 0
-        fi
-    done
-    return 1
+# ═══════════════════════════════════════════════
+# USER HELPERS
+# ═══════════════════════════════════════════════
+
+get_target_user() {
+    local u="${SUDO_USER:-}"
+    [[ -z "$u" ]] && u="${USER:-}"
+    [[ -z "$u" ]] && u=$(getent passwd 2>/dev/null | awk -F: '$3 >= 1000 {print $1; exit}')
+    [[ -z "$u" ]] && u="root"
+    echo "$u"
 }
 
-# ═══════════════════════════════════════════════════════════
-# SNAPSHOT — Pre-stage backup
-# ═══════════════════════════════════════════════════════════
-
-snapshot_stage() {
-    local stage="$1"
-    local snapshot="${SNAPSHOT_DIR}/${stage}.tar.gz"
-
-    if is_dry_run; then
-        log "[DRY-RUN] snapshot: $stage"
-        return 0
-    fi
-
-    if [[ -d /etc/pop-os-setup ]]; then
-        tar -czf "$snapshot" -C / etc/pop-os-setup 2>/dev/null || true
-        log "[$stage] snapshot: $snapshot"
-    fi
+get_user_home() {
+    local u="${1:-}"
+    [[ -z "$u" ]] && u=$(get_target_user)
+    getent passwd "$u" 2>/dev/null | cut -d: -f6 || echo "$HOME"
 }
 
-rollback_stage() {
-    local stage="$1"
-    local snapshot="${SNAPSHOT_DIR}/${stage}.tar.gz"
+# ═══════════════════════════════════════════════
+# FILE OPERATIONS
+# ═══════════════════════════════════════════════
 
-    if [[ ! -f "$snapshot" ]]; then
-        warn "[$stage] no snapshot to rollback"
-        return 1
-    fi
-
-    if is_dry_run; then
-        log "[DRY-RUN] rollback: $stage from $snapshot"
-        return 0
-    fi
-
-    tar -xzf "$snapshot" -C / 2>/dev/null || true
-    log "[$stage] rollback completed"
+append_once() {
+    local file="$1" line="$2"
+    [[ -f "$file" ]] && grep -Fxq "$line" "$file" 2>/dev/null && return 2
+    echo "$line" >> "$file"
+    return 0
 }
 
-rollback_pipeline() {
-    log "ROLLBACK: reverting all stages"
+# ═══════════════════════════════════════════════
+# EXECUTION IDENTITY LOG (v9.3 — structured JSONL)
+# ═══════════════════════════════════════════════
 
-    for state_file in "${STATE_DIR}"/*.state; do
-        [[ -f "$state_file" ]] || continue
-        local stage
-        stage=$(basename "$state_file" .state)
-        rollback_stage "$stage"
-    done
+log_execution_event() {
+    local run_id="$1"
+    local event="$2"
+    local stage="${3:-}"
+    local status="${4:-info}"
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local fingerprint="${PIPELINE_FINGERPRINT:-unknown}"
 
-    log "ROLLBACK: complete"
+    local log_file="${LOGDIR}/run_${run_id}.jsonl"
+    ensure_dir "$(dirname "$log_file")"
+
+    cat >> "$log_file" << EOF
+{"ts":"${timestamp}","run_id":"${run_id}","event":"${event}","stage":"${stage}","status":"${status}","fingerprint":"${fingerprint}","version":"${RUNTIME_VERSION}","build_id":"${BUILD_ID}"}
+EOF
 }
 
-# ═══════════════════════════════════════════════════════════
-# FAULT ISOLATION — Trap + recovery
-# ═══════════════════════════════════════════════════════════
-
-CURRENT_STAGE="${CURRENT_STAGE:-}"
-
-stage_error_handler() {
-    local line="${1:-0}"
-    local stage="${CURRENT_STAGE:-unknown}"
-
-    err "ERROR in $stage at line $line"
-    _emit_event "$stage" "CRASHED" "0"
-
-    case "$RECOVERY_POLICY" in
-        skip)
-            warn "RECOVERY_POLICY=skip — mark $stage SKIPPED and continue"
-            mark_stage "$stage" "SKIPPED"
-            ;;
-        retry)
-            warn "RECOVERY_POLICY=retry — will retry $stage"
-            mark_stage "$stage" "RETRYING"
-            ;;
-        abort|*)
-            err "RECOVERY_POLICY=abort — stop pipeline"
-            set_safe_mode
-            ;;
-    esac
-}
-
-install_trap() {
-    trap 'stage_error_handler $LINENO' ERR
-}
-
-restore_trap() {
-    trap - ERR
-}
-
-# ═══════════════════════════════════════════════════════════
-# STAGE RESOLUTION
-# ═══════════════════════════════════════════════════════════
-
-resolve_stage() {
-    local input="$1"
-
-    if [[ -f "${STAGEDIR}/${input}.sh" ]]; then
-        echo "${STAGEDIR}/${input}.sh"
-        return 0
-    fi
-
-    # Try as name
-    local found
-    found=$(find "${STAGEDIR}" -maxdepth 1 -name "*${input}*.sh" 2>/dev/null | head -1)
-    if [[ -n "$found" ]]; then
-        echo "$found"
-        return 0
-    fi
-
-    return 1
-}
-
-get_stage_name() {
-    local num="$1"
-    local file
-    file=$(find "${STAGEDIR}" -maxdepth 1 -name "stage${num}_*.sh" 2>/dev/null | head -1)
-    basename "$file" .sh
-}
-
-get_stage_file() {
-    local num="$1"
-    find "${STAGEDIR}" -maxdepth 1 -name "stage${num}_*.sh" 2>/dev/null | head -1
-}
-
-# ═══════════════════════════════════════════════════════════
-# VALIDATION
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
+# VALIDATION (v9.3 — reproducibility enforcement)
+# ═══════════════════════════════════════════════
 
 validate_all() {
     local errors=0
 
-    # Check lib files
-    for lib in logging.sh utils.sh; do
-        if [[ ! -f "${LIBDIR}/${lib}" ]]; then
-            err "Missing: ${LIBDIR}/${lib}"
+    # Check git identity
+    if [[ "$BUILD_ID" == "unknown" ]]; then
+        warn "No git repository — reproducibility reduced"
+    fi
+
+    # Check stage registry
+    local stage_count
+    stage_count=$(find "$STAGEDIR" -maxdepth 1 -name 'stage*.sh' 2>/dev/null | wc -l)
+    if [[ "$stage_count" -eq 0 ]]; then
+        err "No stage files found in $STAGEDIR"
+        ((errors++))
+    else
+        ok "Stage registry: $stage_count stages"
+    fi
+
+    # Check required lib files
+    for lib in logging utils; do
+        if [[ -f "${LIBDIR}/${lib}.sh" ]]; then
+            ok "lib/${lib}.sh: present"
+        else
+            err "lib/${lib}.sh: MISSING"
             ((errors++))
         fi
     done
 
-    # Check SCRIPT_ROOT
-    if [[ ! -d "$SCRIPT_ROOT" ]]; then
-        err "Invalid SCRIPT_ROOT: $SCRIPT_ROOT"
+    # Check engine
+    if [[ -f "${ENGINEDIR}/runner.sh" ]]; then
+        ok "engine/runner.sh: present"
+        bash -n "${ENGINEDIR}/runner.sh" 2>/dev/null || {
+            err "engine/runner.sh: syntax error"
+            ((errors++))
+        }
+    else
+        warn "engine/runner.sh: not found (optional)"
+    fi
+
+    # Validate fingerprint generation
+    compute_pipeline_fingerprint "test" 2>/dev/null
+    if [[ -z "$PIPELINE_FINGERPRINT" ]]; then
+        err "Fingerprint generation failed"
         ((errors++))
+    else
+        ok "Fingerprint: ${FINGERPRINT_SHORT}"
     fi
 
-    # Check stages dir
-    if [[ ! -d "$STAGEDIR" ]]; then
-        err "Missing stages directory: $STAGEDIR"
-        ((errors++))
-    fi
-
-    # Syntax check all stages
-    local stage_errors=0
-    for stage_file in "${STAGEDIR}"/*.sh; do
-        [[ -f "$stage_file" ]] || continue
-        if ! bash -n "$stage_file" 2>/dev/null; then
-            err "SYNTAX ERROR: $stage_file"
-            ((stage_errors++))
-        fi
-    done
-
-    if ((stage_errors > 0)); then
-        err "$stage_errors stage(s) have syntax errors"
-        ((errors += stage_errors))
-    fi
-
-    if is_safe_mode; then
-        warn "SAFE_MODE: blocking full execution"
-        ((errors++))
-    fi
-
-    if ((errors == 0)); then
-        ok "Validation passed — pipeline ready"
-    fi
-
-    return $((errors > 0 ? 1 : 0))
-}
-
-validate_dependency() {
-    local stage="$1"
-    local before_file="${STAGEDIR}/${stage}.before"
-
-    if [[ -f "$before_file" ]]; then
-        while read -r dep; do
-            [[ -z "$dep" ]] && continue
-            if ! is_done "$dep"; then
-                err "Dependency not met: $stage requires $dep"
-                return 1
-            fi
-        done < "$before_file"
-    fi
-    return 0
+    return $errors
 }
 
 validate_dag() {
-    local errors=0
-    log "DAG validation (no cycles check)"
+    log "Validating stage DAG..."
 
-    for before_file in "${STAGEDIR}"/*.before; do
-        [[ -f "$before_file" ]] || continue
-        local stage
-        stage=$(basename "$before_file" .before)
+    local stage_files
+    stage_files=$(find "$STAGEDIR" -maxdepth 1 -name 'stage*.sh' | sort)
+    local prev_num=0
 
-        while read -r dep; do
-            [[ -z "$dep" ]] && continue
-            if [[ ! -f "${STAGEDIR}/${dep}.sh" ]]; then
-                err "Broken dependency: $stage → $dep (not found)"
-                ((errors++))
-            fi
-        done < "$before_file"
+    for sf in $stage_files; do
+        local bn
+        bn=$(basename "$sf" .sh)
+        local num
+        num=$(echo "$bn" | sed 's/stage//;s/^0*//' | grep -o '^[0-9]*' || echo 0)
+        if [[ "$num" -lt "$prev_num" ]]; then
+            err "Circular dependency or reorder detected: $bn < $prev_num"
+            return 1
+        fi
+        prev_num=$num
     done
 
-    return $((errors > 0 ? 1 : 0))
+    ok "Stage DAG: valid (no circular dependencies)"
+    return 0
 }
 
-# ═══════════════════════════════════════════════════════════
-# INIT — Bootstrap on source
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
+# LOCKING
+# ═══════════════════════════════════════════════
 
-bootstrap
+acquire_lock() {
+    local lock_file="${STATE_DIR}/.lock"
+    ensure_dir "$(dirname "$lock_file")"
 
-# ═══════════════════════════════════════════════════════════
-# RUNTIME VERSION
-# ═══════════════════════════════════════════════════════════
+    if [[ -f "$lock_file" ]]; then
+        local pid
+        pid=$(cat "$lock_file" 2>/dev/null || echo "")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+        warn "Stale lock detected — removing"
+        rm -f "$lock_file"
+    fi
 
-readonly RUNTIME_VERSION="v9.2"
-
-get_version() {
-    echo "$RUNTIME_VERSION"
+    echo $$ > "$lock_file"
+    LOCK_FILE="$lock_file"
+    return 0
 }
+
+release_lock() {
+    [[ -n "${LOCK_FILE:-}" ]] && [[ -f "$LOCK_FILE" ]] && \
+        [[ "$(cat "$LOCK_FILE" 2>/dev/null || echo)" == "$$" ]] && \
+        rm -f "$LOCK_FILE"
+}
+
+set_safe_mode() { export SAFE_MODE=1; }
+
+trap 'release_lock 2>/dev/null || true' EXIT INT TERM
+
+export RUNTIME_VERSION BUILD_ID BUILD_TREE BUILD_TIME PIPELINE_FINGERPRINT
+export -f get_version derive_build_identity compute_pipeline_fingerprint attach_run_identity
+export -f validate_all validate_dag log_execution_event
+export -f step ok warn err info log
+export -f get_target_user get_user_home
