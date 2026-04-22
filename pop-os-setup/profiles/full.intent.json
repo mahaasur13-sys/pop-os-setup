@@ -1,0 +1,35 @@
+{
+  "profile": "full",
+  "version": "1.0",
+  "intent_version": "v1",
+  "generated": "2026-04-22",
+  "requirements": {
+    "os": "pop_os_24.04",
+    "nvidia_driver": ">=550",
+    "cuda": ">=12.0",
+    "docker": "enabled",
+    "docker_compose": ">=2.0",
+    "python": ">=3.12",
+    "zsh": "enabled",
+    "neovim": "enabled",
+    "firewall": "enabled",
+    "tailscale": "enabled",
+    "k8s": "enabled",
+    "monitoring": "enabled",
+    "backup": "enabled",
+    "ssh": "optional"
+  },
+  "constraints": {
+    "root_access": "sudo_only",
+    "network": "required",
+    "internet": "required",
+    "multi_node": "optional"
+  },
+  "success_criteria": {
+    "gpu_functional": "nvidia-smi returns GPU info",
+    "docker_functional": "docker ps succeeds",
+    "k8s_functional": "kubectl get nodes succeeds",
+    "monitoring_functional": "curl localhost:3000/login succeeds",
+    "backup_functional": "velero backup get succeeds"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "profile": "cluster",
+  "version": "1.0",
+  "intent_version": "v1",
+  "generated": "2026-04-22",
+  "requirements": {
+    "os": "pop_os_24.04",
+    "docker": "enabled",
+    "k8s": "enabled",
+    "storage": "enabled",
+    "networking": "enabled",
+    "monitoring": "enabled"
+  },
+  "constraints": {
+    "root_access": "sudo_only",
+    "network": "required",
+    "internet": "required",
+    "multi_node": true,
+    "ha_setup": "recommended"
+  },
+  "success_criteria": {
+    "k8s_functional": "kubectl get nodes shows Ready",
+    "storage_functional": "kubectl get storageclass shows default",
+    "networking_functional": "kubectl get pods -A all Running",
+    "monitoring_functional": "curl localhost:3000/login succeeds"
+  }
+}
