@@ -1,184 +1,282 @@
 #!/usr/bin/env bash
-#===============================================
-# pop-os-setup.sh v9.4 — Production Installer
-# Observability layer: no silent execution
-#===============================================
+#=================================================================
+# pop-os-setup.sh v9.5 — Observability-Native Installer
+#=================================================================
+# New in v9.5: full event-driven observability layer
+#   • tracer.sh  — trace context + JSONL emission
+#   • event_bus  — fan-out to handlers/hooks
+#   • metrics.sh — stage_duration_ms, failure_rate, retry_count
+#   • live_ui.sh — real-time TTY progress bar
+#=================================================================
 
 set -euo pipefail
 
-# ─── Metadata ────────────────────────────────────────────────────────────────
-readonly RUNTIME_VERSION="v9.4"
-readonly SCRIPT_NAME="pop-os-setup"
-readonly STATE_DIR="${STATE_DIR:-/var/lib/pop-os-setup}"
-readonly LOG_DIR="${LOG_DIR:-/var/log/pop-os-setup}"
+# ═══════════════════════════════════════════════════════════════
+# Bootstrap
+# ═══════════════════════════════════════════════════════════════
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+SCRIPT_DIR="$(pwd)"
+LIB_DIR="${SCRIPT_DIR}/lib"
+OBS_DIR="${SCRIPT_DIR}/observability"
+export PATH="${SCRIPT_DIR}:${LIB_DIR}:${PATH}"
+mkdir -p "${SCRIPT_DIR}/logs" "${SCRIPT_DIR}/state"
 
-# ─── Bootstrap ────────────────────────────────────────────────────────────────
-bootstrap() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    LIBDIR="${script_dir}/lib"
-    STAGEDIR="${script_dir}/stages"
+# ═══════════════════════════════════════════════════════════════
+# Version (single source of truth)
+# ═══════════════════════════════════════════════════════════════
+readonly RUNTIME_VERSION="v9.5"
+get_version() { echo "$RUNTIME_VERSION"; }
 
-    # Source observability FIRST
-    if [[ -f "${LIBDIR}/observability.sh" ]]; then
-        source "${LIBDIR}/observability.sh"
-    fi
+# ═══════════════════════════════════════════════════════════════
+# Source libraries (load order matters)
+# ═══════════════════════════════════════════════════════════════
+source "${LIB_DIR}/logging.sh"
+source "${LIB_DIR}/utils.sh"
+source "${LIB_DIR}/runtime.sh"        # installs stage_load() etc
+source "${OBS_DIR}/tracer.sh"         # trace_init, emit_event, etc.
+source "${OBS_DIR}/metrics.sh"        # metrics_*
 
-    if [[ -f "${LIBDIR}/logging.sh" ]]; then
-        source "${LIBDIR}/logging.sh"
-    fi
+# Live UI (TTY only)
+WATCH_MODE=0
+[[ -t 1 ]] && source "${OBS_DIR}/live_ui.sh" 2>/dev/null || true
 
-    if [[ -f "${LIBDIR}/utils.sh" ]]; then
-        source "${LIBDIR}/utils.sh"
-    fi
+# ═══════════════════════════════════════════════════════════════
+# CLI flags
+# ═══════════════════════════════════════════════════════════════
+_show_help() {
+    cat << 'HELPEOF'
+Usage: pop-os-setup.sh [OPTIONS]
 
-    if [[ -f "${LIBDIR}/runtime.sh" ]]; then
-        source "${LIBDIR}/runtime.sh"
-    fi
+Options:
+  --profile <name>    Profile: ai-dev|workstation|full (default: full)
+  --dry-run           Validate stages without executing
+  --watch             Enable live TTY progress display
+  --trace-level <lvl> Trace level: debug|info|warn|error|critical (default: info)
+  --list              List all stages
+  --list-profiles     List available profiles
+  --resume <run_id>   Resume from run_id checkpoint
+  --verify            Verify integrity + exit
+  --help              Show this help
 
-    init_state_dir
-    init_log_dir
-
-    obs_init "${RUN_ID:-}"
+Examples:
+  pop-os-setup.sh                          # full profile, interactive
+  pop-os-setup.sh --profile ai-dev         # AI/ML workstation
+  pop-os-setup.sh --dry-run --watch         # preview with live UI
+  pop-os-setup.sh --resume RUN-20260422ABC # resume interrupted run
+HELPEOF
 }
 
-# ─── Main ────────────────────────────────────────────────────────────────────
-main() {
-    bootstrap "$@"
-
-    obs_emit "banner" "Starting pop-os-setup ${RUNTIME_VERSION}"
-
-    log "════════════════════════════════════"
-    log "  pop-os-setup ${RUNTIME_VERSION}"
-    log "  Profile:   ${PROFILE:-full}"
-    log "  Run ID:    ${RUN_ID:-unknown}"
-    log "  Stage:     ${START_STAGE:-1} → ${END_STAGE:-99}"
-    log "  Safe mode: ${SAFE_MODE:-0}"
-    log "════════════════════════════════════"
-
-    local stages_run=0 stages_skipped=0 stages_failed=0
-    local start_ts=$(date +%s)
-
-    for stage_num in $(seq "${START_STAGE:-1}" "${END_STAGE:-99}"); do
-        # Stop at END_STAGE
-        [[ $stage_num -gt ${END_STAGE:-99} ]] && break
-
-        # Find stage file
-        local stage_file
-        stage_file=$(find_stage_file "$stage_num" 2>/dev/null || true)
-
-        if [[ -z "$stage_file" || ! -f "$stage_file" ]]; then
-            continue
-        fi
-
-        local stage_name
-        stage_name=$(derive_stage_name "$stage_file")
-        CURRENT_STAGE="$stage_name"
-
-        obs_stage_begin "$stage_num" "$stage_name" "99"
-        obs_progress "$stage_num" 26 "$stage_name"
-
-        local stage_exit=0
-        if [[ "${DRY_RUN:-0}" == "1" ]]; then
-            ok "DRY-RUN: $stage_name (would execute)"
-            obs_stage_end "$stage_num" "$stage_name" "skipped"
-            ((stages_skipped++)) || true
-        else
-            if source "$stage_file" 2>&1; then
-                local stage_fn="stage_${stage_num}_${stage_name}"
-                if declare -f "$stage_fn" >/dev/null 2>&1; then
-                    if "$stage_fn" 2>&1; then
-                        ok "$stage_name: OK"
-                        obs_stage_end "$stage_num" "$stage_name" "success"
-                        obs_op_end "stage_${stage_num}" "ok"
-                        ((stages_run++)) || true
-                    else
-                        err "$stage_name: FAIL"
-                        obs_stage_end "$stage_num" "$stage_name" "failure"
-                        obs_err "Stage $stage_num failed with exit code $?"
-                        ((stages_failed++)) || true
-                        handle_failure "$stage_num" "$stage_name"
-                    fi
-                else
-                    ok "$stage_name: loaded (no main function)"
-                    obs_stage_end "$stage_num" "$stage_name" "skipped"
-                    ((stages_skipped++)) || true
-                fi
-            else
-                err "$stage_name: SOURCE FAIL"
-                obs_stage_end "$stage_num" "$stage_name" "failure"
-                ((stages_failed++)) || true
-            fi
-        fi
-    done
-
-    local duration=$(( $(date +%s) - start_ts ))
-
-    obs_summary \
-        "$([ $stages_failed -eq 0 ] && echo "success" || echo "partial_failure")" \
-        "$stages_run" "$stages_skipped" "$stages_failed" "$duration"
-
-    return $((stages_failed > 0 ? 1 : 0))
-}
-
-# ─── Failure handler ─────────────────────────────────────────────────────────
-handle_failure() {
-    local stage_num="$1"
-    local stage_name="$2"
-
-    obs_err "Stage $stage_num ($stage_name) failed"
-
-    if [[ "${SAFE_MODE:-0}" == "1" || "${CONTINUE_ON_ERROR:-0}" != "1" ]]; then
-        obs_emit "run_aborted" "Aborting due to stage failure (safe mode)"
-        exit 1
-    fi
-
-    obs_warn "Continuing despite failure (CONTINUE_ON_ERROR=1)"
-}
-
-# ─── Parse args ───────────────────────────────────────────────────────────────
 parse_args() {
     DRY_RUN=0
-    START_STAGE=1
-    END_STAGE=99
-    PROFILE="${PROFILE:-}"
-    SAFE_MODE=0
-    CONTINUE_ON_ERROR=0
+    PROFILE=""
+    LIST_STAGES=0
+    LIST_PROFILES=0
+    RESUME_ID=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --dry-run) DRY_RUN=1 ;;
-            --stage) START_STAGE="$2"; shift ;;
-            --end-stage) END_STAGE="$2"; shift ;;
-            --profile) PROFILE="$2"; shift ;;
-            --safe) SAFE_MODE=1 ;;
-            --continue) CONTINUE_ON_ERROR=1 ;;
-            --run-id) export RUN_ID="$2"; shift ;;
-            --help|-h) usage; exit 0 ;;
-            *) ;;
+            --dry-run)       DRY_RUN=1 ;;
+            --watch)         WATCH_MODE=1 ;;
+            --profile)       PROFILE="${2:-}"; shift ;;
+            --trace-level)   TRACE_LEVEL="${2:-info}"; shift ;;
+            --list)          LIST_STAGES=1 ;;
+            --list-profiles) LIST_PROFILES=1 ;;
+            --resume)        RESUME_ID="${2:-}"; shift ;;
+            --verify)        VERIFY_MODE=1 ;;
+            --help)          _show_help; exit 0 ;;
+            *)               err "Unknown option: $1" ;;
         esac
         shift
     done
 }
 
-usage() {
-    cat << 'USAGE'
-  pop-os-setup.sh [options]
+# ═══════════════════════════════════════════════════════════════
+# Main
+# ═══════════════════════════════════════════════════════════════
+main() {
+    log "══════════════════════════════════════════"
+    log "  pop-os-setup $(get_version)"
+    log "  $(uname -m) | $(detect_os)"
+    log "══════════════════════════════════════════"
 
-  --dry-run         Preview mode (no changes)
-  --stage N         Start from stage N
-  --end-stage N     Stop at stage N
-  --profile NAME    Profile: workstation|ai-dev|cluster|full
-  --safe            Abort on any stage failure
-  --continue        Keep going despite failures
-  --run-id ID       Set explicit run ID
-  --help            Show this help
+    # ── Init observability ──────────────────────────────────────
+    local run_id
+    run_id="$(date '+RUN-%Y%m%d%H%M%S')-$$"
+    local trace_file="${SCRIPT_DIR}/logs/trace_${run_id}.jsonl"
 
-  Observability enabled by default (no silent execution).
-USAGE
+    mkdir -p "$(dirname "$trace_file")"
+    trace_init "$run_id" "$trace_file"
+    trace_info "cli.parse" "root" "CLI parsed, starting pipeline" \
+        "profile=${PROFILE:-default}" \
+        "dry_run=${DRY_RUN}" \
+        "watch_mode=${WATCH_MODE}" \
+        "version=$(get_version)"
+
+    metrics_pipeline_start
+
+    # ── Pre-flight checks ──────────────────────────────────────
+    if ! require_root; then
+        err "Root required (use sudo)"
+        trace_critical "acl.root_required" "root" "Permission denied"
+        exit 1
+    fi
+
+    # ── Load profile ────────────────────────────────────────────
+    if [[ -n "$RESUME_ID" ]]; then
+        info "Resuming run: ${RESUME_ID}"
+    fi
+
+    if [[ -z "$PROFILE" ]]; then
+        PROFILE="full"
+    fi
+
+    log "Profile: ${PROFILE}"
+
+    # ── List modes ─────────────────────────────────────────────
+    if ((LIST_STAGES)); then
+        list_stages
+        exit 0
+    fi
+
+    if ((LIST_PROFILES)); then
+        list_profiles
+        exit 0
+    fi
+
+    # ── Validate + list ─────────────────────────────────────────
+    if ! stage_discovery "${SCRIPT_DIR}/stages"; then
+        err "Stage discovery failed"
+        exit 1
+    fi
+
+    log "Discovered $(stage_count) stages"
+
+    if ((VERIFY_MODE)); then
+        verify_stages || exit 1
+        ok "Verification passed"
+        exit 0
+    fi
+
+    # ── Pipeline start ──────────────────────────────────────────
+    local pipeline_start_ms
+    pipeline_start_ms=$(($(date +%s%3N)))
+    trace_pipeline_start "${PROFILE}"
+    metrics_pipeline_start
+
+    log "Starting pipeline — Run ID: ${run_id}"
+    log "Trace file: ${trace_file}"
+    log ""
+
+    # ── Live UI ────────────────────────────────────────────────
+    if ((WATCH_MODE)); then
+        info "Watch mode: streaming trace from ${trace_file}"
+        liveui_attach "$trace_file" &
+        local liveui_pid=$!
+    fi
+
+    # ── Execute stages ─────────────────────────────────────────
+    local exit_code=0
+    local stage_num=0
+    local stage_name=""
+
+    while IFS= read -r stage_file; do
+        ((stage_num++))
+
+        # Load + validate
+        stage_load "$stage_file" || {
+            warn "Skipping ${stage_file} (load failed)"
+            continue
+        }
+
+        stage_name="$(stage_get_name)"
+
+        # Pre-stage observability
+        metrics_stage_begin "$stage_num" "$stage_name"
+        trace_stage_start "$stage_num" "$stage_name"
+        liveui_init
+
+        log ""
+        log "[STAGE ${stage_num}] $(toupper "$stage_name")"
+
+        # ── Run stage ────────────────────────────────────────
+        local stage_start_ms
+        stage_start_ms=$(($(date +%s%3N)))
+
+        if ((DRY_RUN)); then
+            ok "[DRY-RUN] Would execute: ${stage_name}"
+            trace_stage_skip "$stage_num" "$stage_name" "dry-run"
+            continue
+        fi
+
+        local stage_output
+        local stage_exit_code=0
+
+        if stage_execute; then
+            local stage_end_ms duration_ms
+            stage_end_ms=$(($(date +%s%3N)))
+            duration_ms=$((stage_end_ms - stage_start_ms))
+
+            trace_stage_success "$stage_num" "$stage_name" "$duration_ms"
+            metrics_stage_end "$stage_num" "$stage_name" "success"
+            liveui_stage_success "$stage_num" "$(stage_count)" "$stage_name"
+
+        else
+            stage_exit_code=$?
+            local stage_end_ms duration_ms
+            stage_end_ms=$(($(date +%s%3N)))
+            duration_ms=$((stage_end_ms - stage_start_ms))
+
+            trace_stage_error "$stage_num" "$stage_name" "stage exited with $stage_exit_code"
+            metrics_stage_end "$stage_num" "$stage_name" "failed"
+
+            err "Stage ${stage_num} failed (exit ${stage_exit_code})"
+            err "Trace: ${trace_file}"
+            liveui_stage_failed "$stage_num" "$(stage_count)" "$stage_name" "exit code $stage_exit_code"
+
+            # Rollback decision
+            if confirm "Rollback last stage?"; then
+                trace_rollback_trigger "$stage_num" "user-requested" "prev_checkpoint"
+                metrics_rollback "$stage_num" "$stage_name"
+                stage_rollback || true
+            fi
+
+            if ! confirm "Continue despite failure?"; then
+                exit_code=1
+                break
+            fi
+        fi
+
+    done < <(stage_enumerate)
+
+    # ── Pipeline end ────────────────────────────────────────────
+    local pipeline_end_ms duration_ms
+    pipeline_end_ms=$(($(date +%s%3N)))
+    duration_ms=$((pipeline_end_ms - pipeline_start_ms))
+
+    trace_pipeline_end "$exit_code" "$duration_ms"
+    metrics_to_json
+    liveui_summary "$exit_code" "$duration_ms"
+
+    # ── Final report ───────────────────────────────────────────
+    echo ""
+    echo "══════════════════════════════════════════"
+    ok   "  pop-os-setup $(get_version) — DONE"
+    info "  Run ID:     ${run_id}"
+    info "  Duration:   ${duration_ms}ms"
+    info "  Trace:      ${trace_file}"
+    echo "══════════════════════════════════════════"
+
+    trace_info "pipeline.complete" "root" "Pipeline complete" \
+        "exit_code=${exit_code}" \
+        "duration_ms=${duration_ms}" \
+        "event_count=${_OBS_EVENT_COUNT:-0}"
+
+    # Kill live UI if running
+    ((WATCH_MODE)) && kill $liveui_pid 2>/dev/null || true
+
+    return $exit_code
 }
 
-# ─── Bootstrap & run ─────────────────────────────────────────────────────────
-bootstrap "$@"
+# ═══════════════════════════════════════════════════════════════
 parse_args "$@"
 main
