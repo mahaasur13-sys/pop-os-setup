@@ -1,32 +1,22 @@
 {
   "profile": "ai-dev",
-  "version": "1.0",
-  "intent_version": "v1",
-  "generated": "2026-04-22",
-  "requirements": {
-    "os": "pop_os_24.04",
-    "nvidia_driver": ">=550",
-    "cuda": ">=12.0",
-    "python": ">=3.12",
-    "docker": "enabled",
-    "docker_compose": ">=2.0",
-    "gpu_stack": ["pytorch", "tensorrt", "ollama"],
-    "jupyter": "enabled",
-    "neovim": "enabled",
-    "zsh": "enabled"
-  },
+  "version": "v10.4",
   "constraints": {
-    "root_access": "sudo_only",
-    "network": "required",
-    "internet": "required",
-    "gpu_required": true,
-    "secure_boot": "compatible"
+    "docker": true,
+    "cuda": true,
+    "python_ai_stack": true,
+    "security_hardening": true,
+    "zsh": true,
+    "nvidia": true,
+    "k8s": true
   },
-  "success_criteria": {
-    "cuda_functional": "nvcc --version succeeds",
-    "gpu_functional": "nvidia-smi returns GPU info",
-    "pytorch_functional": "python3 -c 'import torch; print(torch.cuda.is_available())' returns True",
-    "jupyter_functional": "jupyter --version succeeds",
-    "docker_functional": "docker ps succeeds"
-  }
+  "intent_checks": [
+    {"id": "docker", "description": "Docker installed", "verified": false},
+    {"id": "cuda", "description": "CUDA available", "verified": false},
+    {"id": "python_ai", "description": "Python AI stack", "verified": false},
+    {"id": "security", "description": "Security hardening", "verified": false},
+    {"id": "zsh", "description": "Zsh configured", "verified": false},
+    {"id": "nvidia", "description": "NVIDIA driver", "verified": false}
+  ],
+  "mode": "production"
 }
