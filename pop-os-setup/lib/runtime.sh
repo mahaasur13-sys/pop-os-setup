@@ -1,211 +1,104 @@
-#!/bin/bash
-#==================================================
-# lib/runtime.sh — Unified Runtime Core v8.0
-#==================================================
-# Single source of truth for all path resolution.
-# All paths are computed, never hardcoded.
-# Compatible with: standalone, staged, agent mode.
-#==================================================
+#!/usr/bin/env bash
+#===============================================
+# lib/runtime.sh — pop-os-setup v9.0 Runtime Core
+# Single Source of Truth for all paths
+#===============================================
 
-[[ -n "${_RUNTIME_SOURCED:-}" ]] && return 0
-_RUNTIME_SOURCED=1
-
-# ─── SAFETY ────────────────────────────────────────────
 set -euo pipefail
 
-# ─── ENV OVERRIDES ─────────────────────────────────────
-# SCRIPT_ROOT  — root of the repo (default: auto-detect)
-# LIBDIR       — lib/ directory (default: $SCRIPT_ROOT/lib)
-# STAGEDIR    — stages/ directory (default: $SCRIPT_ROOT/stages)
-# ENGDIR      — engine/ directory (default: $SCRIPT_ROOT/engine)
-# PROFILEDIR  — profiles/ directory (default: $SCRIPT_ROOT/profiles)
-# SCHEMADIR   — schema/ directory (default: $SCRIPT_ROOT/schema)
-# RUNDIR      — runtime data dir (default: /tmp/pop-os-run)
-# STATE_DIR   — execution state (default: $RUNDIR/state)
-# LOG_DIR     — log output (default: /var/log)
-# AGENT_MODE  — if set, agent mode (no TTY prompts)
-
-# ─── PATH RESOLUTION ────────────────────────────────────
-_resolve_script_root() {
-    # Priority: env override → symlink-resolved → PWD fallback
-    if [[ -n "${SCRIPT_ROOT:-}" ]]; then
-        [[ -d "$SCRIPT_ROOT" ]] && { cd "$SCRIPT_ROOT" && pwd; return 0; }
-    fi
-
-    local src="${BASH_SOURCE[0]:-}"
-    local dir
-
+# ─── ROOT RESOLUTION (symlink-aware, env-overrideable) ─────────────────────────
+_resolve_root() {
+    local src="${BASH_SOURCE[0]}"
     if [[ -L "$src" ]]; then
-        # Symlink-aware: resolve through symlink chain
-        dir=$(cd "$(dirname "$(readlink -f "$src")")" && pwd)
-    elif [[ -n "$src" ]]; then
-        dir=$(cd "$(dirname "$src")" && pwd)
+        cd "$(dirname "$(readlink -f "$src")")/../.." && pwd -P
     else
-        dir=$(pwd)
+        cd "$(dirname "$src")/.." && pwd -P
     fi
-
-    # Normalize: stages/lib/foo.sh → repo root
-    case "$dir" in
-        */stages)    cd "$(dirname "$dir")" && pwd ;;
-        */lib)       cd "$(dirname "$dir")" && pwd ;;
-        */engine)    cd "$(dirname "$dir")" && pwd ;;
-        */agent)     cd "$(dirname "$dir")" && pwd ;;
-        */control-plane) cd "$(dirname "$dir")" && pwd ;;
-        */schema)    cd "$(dirname "$dir")" && pwd ;;
-        */profiles)  cd "$(dirname "$dir")" && pwd ;;
-        *)           echo "$dir"
-    esac
 }
 
-# Initialize once
-SCRIPT_ROOT="${SCRIPT_ROOT:-}"
-SCRIPT_ROOT="$(_resolve_script_root)" || SCRIPT_ROOT="$(pwd)"
-readonly SCRIPT_ROOT
+# Allow override (useful for testing / packaging)
+export SCRIPT_ROOT="${SCRIPT_ROOT:-$(_resolve_root)}"
+export LIBDIR="${SCRIPT_ROOT}/lib"
+export STAGEDIR="${SCRIPT_ROOT}/stages"
+export ENGinedir="${SCRIPT_ROOT}/engine"
+export PROFILEDIR="${SCRIPT_ROOT}/profiles"
 
-# ─── DIRECTORY VARIABLES ────────────────────────────────
-LIBDIR="${LIBDIR:-${SCRIPT_ROOT}/lib}"
-STAGEDIR="${STAGEDIR:-${SCRIPT_ROOT}/stages}"
-ENGDIR="${ENGDIR:-${SCRIPT_ROOT}/engine}"
-PROFILEDIR="${PROFILEDIR:-${SCRIPT_ROOT}/profiles}"
-SCHEMADIR="${SCHEMADIR:-${SCRIPT_ROOT}/schema}"
-AGENTDIR="${AGENTDIR:-${SCRIPT_ROOT}/agent}"
-CONTROLDIR="${CONTROLDIR:-${SCRIPT_ROOT}/control-plane}"
+# ─── RUNTIME DIRS ─────────────────────────────────────────────────────────────
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export STATE_DIR="${XDG_CONFIG_HOME}/pop-os-setup/state"
+export RUN_DIR="${RUN_DIR:-/tmp/pop-os-setup/$(date +%s)}"
 
-# Runtime dirs (ephemeral)
-RUNDIR="${RUNDIR:-/tmp/pop-os-run/${RUN_ID:-$(date +%Y%m%d_%H%M%S)}}"
-STATE_DIR="${STATE_DIR:-${RUNDIR}/state}"
-CACHE_DIR="${CACHE_DIR:-${RUNDIR}/cache}"
-LOG_DIR="${LOG_DIR:-/var/log}"
+mkdir -p "$STATE_DIR" "$RUN_DIR" 2>/dev/null || true
+chmod 755 "$STATE_DIR" 2>/dev/null || true
 
-# Ensure ephemeral dirs exist
-mkdir -p "$RUNDIR" "$STATE_DIR" "$CACHE_DIR" 2>/dev/null || true
-
-# ─── EXPORT ─────────────────────────────────────────────
-export SCRIPT_ROOT LIBDIR STAGEDIR ENGDIR PROFILEDIR SCHEMADIR AGENTDIR CONTROLDIR
-export RUNDIR STATE_DIR CACHE_DIR LOG_DIR
-
-# ─── STAGE DETECTION ───────────────────────────────────
-# Resolves a stage number or glob to actual file.
-# Usage: resolve_stage "7"        → /path/to/stage7_docker.sh
-#        resolve_stage "docker"   → /path/to/stage7_docker.sh
-#        resolve_stage "stage7*"   → first match
-resolve_stage() {
-    local query="$1"
-
-    # Direct file check
-    if [[ -f "$query" ]]; then
-        echo "$(readlink -f "$query")"
-        return 0
-    fi
-
-    # By number: "7" or "07"
-    local num="${query#stage}"
-    num="${num%%_*}"
-    num="${num#0}" # strip leading zero
-
-    local glob1="${STAGEDIR}/stage${num}_*.sh"
-    local glob2="${STAGEDIR}/stage$(printf '%02d' "$num")_*.sh"
-
-    for glob in "$glob1" "$glob2"; do
-        local match
-        match=$(ls $glob 2>/dev/null | sort -V | head -1)
-        if [[ -n "$match" ]]; then
-            echo "$match"
-            return 0
-        fi
-    done
-
-    # By name substring
-    local name_match
-    name_match=$(grep -l "_${query}\.sh$" "${STAGEDIR}"/*.sh 2>/dev/null | head -1)
-    if [[ -n "$name_match" ]]; then
-        echo "$name_match"
-        return 0
-    fi
-
-    return 1
-}
-
-# ─── BOOTSTRAP LIBS ─────────────────────────────────────
+# ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
 bootstrap_libs() {
-    local needed="${1:-all}"
-    local errors=0
-
-    for lib in \
-        "$LIBDIR/_path.sh" \
-        "$LIBDIR/logging.sh" \
-        "$LIBDIR/utils.sh" \
-        "$LIBDIR/profiles.sh" \
-        "$LIBDIR/installer.sh"; do
-
-        if [[ ! -f "$lib" ]]; then
-            echo "[runtime] FATAL: missing $lib" >&2
-            ((errors++)) || true
-            continue
+    local ok=0
+    for lib in logging.sh utils.sh; do
+        if [[ -f "${LIBDIR}/${lib}" ]]; then
+            source "${LIBDIR}/${lib}"
+        else
+            echo "FATAL: ${LIBDIR}/${lib} missing" >&2
+            ok=1
         fi
-
-        source "$lib" 2>/dev/null || {
-            echo "[runtime] FATAL: failed to source $lib" >&2
-            ((errors++)) || true
-        }
     done
+    return $ok
+}
 
-    # Engine libs (optional, non-fatal)
-    for elib in "$ENGDIR/_dag.sh" "$ENGDIR/_state.sh" "$ENGDIR/event-store.sh"; do
-        [[ -f "$elib" ]] && source "$elib" 2>/dev/null || true
+# ─── STAGE GUARD (idempotency) ───────────────────────────────────────────────
+stage_guard() {
+    [[ "${_STAGE_SOURCED:-}" == "yes" ]] && return 0
+    export _STAGE_SOURCED=yes
+    bootstrap_libs
+}
+
+# ─── STAGE RESOLVER ──────────────────────────────────────────────────────────
+resolve_stage() {
+    local input="$1"
+    # By number: "1" → stage01_* or "7" → stage07_*
+    local padded
+    padded=$(printf '%02d' "$input" 2>/dev/null || printf '%02d' "0")
+    local found
+    found=$(ls "${STAGEDIR}"/stage"${padded}"_*.sh 2>/dev/null | head -1)
+    # By name fallback
+    if [[ -z "$found" ]]; then
+        found=$(ls "${STAGEDIR}"/stage*_"${input}"*.sh 2>/dev/null | head -1)
+    fi
+    if [[ -z "$found" ]]; then
+        echo "ERROR: stage not found: $input" >&2
+        return 1
+    fi
+    echo "$found"
+}
+
+# ─── PIPELINE VALIDATOR ──────────────────────────────────────────────────────
+validate_pipeline() {
+    local errors=0
+    for f in "${STAGEDIR}"/stage*.sh; do
+        [[ -f "$f" ]] || continue
+        if ! bash -n "$f" 2>/dev/null; then
+            echo "SYNTAX FAIL: $f" >&2
+            errors=$((errors + 1))
+        fi
     done
-
     return $errors
 }
 
-# ─── STAGE GUARD ────────────────────────────────────────
-# Call at top of every stage script:
-#   source "$(dirname "${BASH_SOURCE[0]}")/../lib/runtime.sh"
-#   stage_guard || return 0
-stage_guard() {
-    [[ "${_STAGE_SOURCED:-}" == "yes" ]] && {
-        log "Stage already sourced — skipping"
-        return 0
-    }
-    export _STAGE_SOURCED="yes"
+# ─── RUN CMD (dry-run aware) ─────────────────────────────────────────────────
+run_cmd() {
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        echo "[DRY-RUN] $*"
+    else
+        eval "$@"
+    fi
 }
 
-# ─── HELPERS ────────────────────────────────────────────
-is_root() { [[ $EUID -eq 0 ]]; }
+# ─── STATE HELPERS ───────────────────────────────────────────────────────────
+is_done() { [[ -f "${STATE_DIR}/${1}.done" ]]; }
+mark_done() { touch "${STATE_DIR}/${1}.done"; }
+mark_failed() { touch "${STATE_DIR}/${1}.failed"; }
+clear_state() { rm -f "${STATE_DIR}"/*.done "${STATE_DIR}"/*.failed 2>/dev/null; }
 
-require_command() {
-    command -v "$1" &>/dev/null || {
-        echo "[runtime] FATAL: required command not found: $1" >&2
-        return 1
-    }
-}
-
-require_file() {
-    [[ -f "$1" ]] || {
-        echo "[runtime] FATAL: required file not found: $1" >&2
-        return 1
-    }
-}
-
-log_stage_start() {
-    local stage_num="$1" stage_name="$2"
-    log "=== STAGE ${stage_num} | ${stage_name} | ${USER:-unknown} @ $(hostname) ==="
-}
-
-log_stage_end() {
-    local stage_num="$1" status="$2" duration="${3:-0}"
-    log "=== STAGE ${stage_num} | ${status} | ${duration}s ==="
-}
-
-# ─── DRY RUN ────────────────────────────────────────────
-is_dry_run() { [[ "${DRY_RUN:-0}" == "1" ]]; }
-
-# ─── VERIFY ─────────────────────────────────────────────
-runtime_verify() {
-    local ok=0
-    [[ -d "$LIBDIR" ]] || { echo "FATAL: LIBDIR not a dir: $LIBDIR" >&2; ok=1; }
-    [[ -d "$STAGEDIR" ]] || { echo "FATAL: STAGEDIR not a dir: $STAGEDIR" >&2; ok=1; }
-    [[ -d "$SCRIPT_ROOT" ]] || { echo "FATAL: SCRIPT_ROOT not a dir: $SCRIPT_ROOT" >&2; ok=1; }
-    [[ -f "$LIBDIR/logging.sh" ]] || { echo "FATAL: logging.sh missing" >&2; ok=1; }
-    return $ok
-}
+# ─── EXPORTED API ───────────────────────────────────────────────────────────
+export -f bootstrap_libs stage_guard resolve_stage validate_pipeline run_cmd
+export -f is_done mark_done mark_failed clear_state
