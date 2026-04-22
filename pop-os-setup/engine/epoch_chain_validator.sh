@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #=================================================
-# engine/epoch_chain_validator.sh — v10.2
+# engine/epoch_chain_validator.sh — v11.0
 # Enforces strict epoch linearity + drift detection
 #=================================================
 [[ -n "${_EPOCH_VALIDATOR_SOURCED:-}" ]] && return 0 || _EPOCH_VALIDATOR_SOURCED=1

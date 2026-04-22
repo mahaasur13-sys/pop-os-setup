@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #===============================================
-# pop-os-setup Audit Suite v10.4
+# pop-os-setup Audit Suite v11.0
 #===============================================
 set -euo pipefail
 
@@ -17,7 +17,7 @@ print_info()  { echo "  [INFO] $1"; }
 audit_all() {
     local failed=0
     echo ""
-    echo "pop-os-setup v10.4 — AUDIT REPORT"
+    echo "pop-os-setup v11.0 — AUDIT REPORT"
     echo "================================"
 
     # 1. File integrity

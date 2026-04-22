@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #===============================================
-# engine/deterministic.sh — Deterministic Runner v10.1
+# engine/deterministic.sh — Deterministic Runner v11.0
 # Pure bash, no runtime state in memory
 #===============================================
 set -euo pipefail

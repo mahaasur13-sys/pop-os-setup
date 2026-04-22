@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #===============================================
-# pop-os-setup.sh — Deterministic Intent-Driven Provisioning System v10.3
+# pop-os-setup.sh — Deterministic Intent-Driven Provisioning System v11.0
 # Three-layer truth: Intent → CESM → Physical → Reconciliation → Intent
 #===============================================
 set -euo pipefail
 
-readonly RUNTIME_VERSION="v10.3"
+readonly RUNTIME_VERSION="v11.0"
 readonly LOGDIR="${LOGDIR:-/var/log/pop-os-setup}"
 readonly STATEDIR="${STATEDIR:-/var/lib/pop-os-setup}"
 readonly INTENT_DIR="${INTENT_DIR:-./profiles}"

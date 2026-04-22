@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #=================================================
-# engine/state_linearizer.sh — v10.2
+# engine/state_linearizer.sh — v11.0
 # Merges epoch snapshots deterministically
 # Enforces single execution timeline
 #=================================================
