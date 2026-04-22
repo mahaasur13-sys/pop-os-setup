@@ -81,7 +81,7 @@ parse_args() {
 
 main() {
     log "═══════════════════════════════════════════"
-    log "  pop-os-setup v9.2.0 — Production Installer"
+    log "  pop-os-setup ${RUNTIME_VERSION} — Production Installer"
     log "═══════════════════════════════════════════"
     log "  Mode:     $MODE"
     log "  Run ID:   $RUN_ID"
@@ -147,7 +147,7 @@ main() {
             # Run pipeline
             if run_pipeline; then
                 log "═══════════════════════════════════════════"
-                log "  ✅ ALL DONE — pop-os-setup v9.2.0"
+                log "  ✅ ALL DONE — pop-os-setup ${RUNTIME_VERSION}"
                 log "═══════════════════════════════════════════"
                 release_lock
                 exit 0
