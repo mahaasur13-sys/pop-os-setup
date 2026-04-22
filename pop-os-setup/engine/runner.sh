@@ -1,311 +1,358 @@
 #!/usr/bin/env bash
 #===============================================
-# engine/runner.sh v9.1 — Production Stage Runner
+# engine/runner.sh v9.2 — Production Pipeline Runner
 #===============================================
-# Idempotent, state-aware, dry-run compatible.
-# Использует lib/runtime.sh для всех путей.
+# 26-stage pipeline with fault isolation, checkpoint,
+# parallel-safety, rollback, and structured observability.
 #===============================================
 
-set -euo pipefail
+[[ -n "${_RUNNER_SOURCED:-}" ]] && return 0 || _RUNNER_SOURCED=1
 
-[[ -n "${_RUNNER_SOURCED:-}" ]] && return 0 || export _RUNNER_SOURCED=1
+# ═══════════════════════════════════════════════════════════
+# STAGE REGISTRY — Explicit order
+# ═══════════════════════════════════════════════════════════
 
-# ─── STAGE REGISTRY ──────────────────────────
-# ВСЕ stages в порядке выполнения
-STAGE_REGISTRY=(
-    "preflight"
-    "system_update"
-    "nvidia"
-    "power"
-    "display_manager"
-    "dev_tools"
-    "docker"
-    "zsh"
-    "neovim"
-    "tailscale"
-    "firewall"
-    "python"
-    "ollama"
-    "kubectl"
-    "k3s"
-    "longhorn"
-    "metallb"
-    "cilium"
-    "rook_ceph"
-    "minio"
-    "monitoring"
-    "backup"
-    "hardening"
-    "ssh_gpg"
-    "cron"
-    "notifications"
-    "final"
+declare -a STAGE_REGISTRY=(
+    "stage01_preflight"
+    "stage02_system_update"
+    "stage03_nvidia"
+    "stage04_power"
+    "stage05_display_manager"
+    "stage06_dev_tools"
+    "stage07_docker"
+    "stage08_zsh"
+    "stage09_neovim"
+    "stage10_hardening"
+    "stage11_firewall"
+    "stage12_python"
+    "stage13_tailscale"
+    "stage14_k8s"
+    "stage15_monitoring"
+    "stage16_storage"
+    "stage17_docker_compose"
+    "stage18_backup"
+    "stage19_notifications"
+    "stage20_cron"
+    "stage21_final"
 )
 
-# ─── INTERNAL HELPERS ─────────────────────────
-
-_trace() {
-    local msg="[$1] ${2:-}"
-    echo "[$(date +%H:%M:%S)] ${msg}" >> "${LOG_DIR}/runner.trace"
-}
-
-# ════════════════════════════════════════════════
-# STAGE EXECUTION ENGINE
-# ════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# PIPELINE EXECUTION
+# ═══════════════════════════════════════════════════════════
 
 run_stage() {
-    local stage_name="${1:-}"
+    local stage="$1"
     local stage_file
 
-    [[ -z "$stage_name" ]] && { err "run_stage: name required"; return 1; }
-
-    stage_file=$(ls "${STAGEDIR}"/stage*_"${stage_name}".sh 2>/dev/null | head -1)
-
-    if [[ -z "$stage_file" || ! -f "$stage_file" ]]; then
-        err "Stage not found: ${stage_name}"
+    stage_file=$(resolve_stage "$stage" 2>/dev/null)
+    if [[ ! -f "$stage_file" ]]; then
+        err "[$stage] file not found at $STAGEDIR"
         return 1
     fi
 
-    local state
-    state=$(get_state "$stage_name")
-
-    # Skip если уже SUCCESS и не FORCE
-    if [[ "$state" == "$STATE_SUCCESS" ]] && [[ "${FORCE:-0}" != "1" ]]; then
-        ok "[${stage_name}] — already done, skipping"
+    # Skip if already done
+    if is_done "$stage"; then
+        ok "[$stage] already done — skipping"
         return 0
     fi
 
-    # Skip если SKIPPED
-    if [[ "$state" == "$STATE_SKIPPED" ]]; then
-        ok "[${stage_name}] — skipped"
+    # Snapshot before execution
+    snapshot_stage "$stage"
+
+    # Check dependency
+    validate_dependency "$stage" || {
+        warn "[$stage] dependency not met — skipping"
+        mark_stage "$stage" "SKIPPED"
         return 0
-    fi
+    }
 
-    # Помечаем RUNNING
-    mark_running "$stage_name"
+    # Execute with fault isolation
+    CURRENT_STAGE="$stage"
+    install_trap
 
-    step "$stage_name" "?"
+    local start end duration
+    start=$(date +%s%3N)
 
     if is_dry_run; then
-        ok "[DRY-RUN] Would run: ${stage_name}"
-        ok "[DRY-RUN] File: ${stage_file}"
-        mark_skipped "$stage_name"
+        log "[DRY-RUN] Would run: $stage"
+        mark_stage "$stage" "SUCCESS"
+        _emit_event "$stage" "DRY-RUN" "0"
+        restore_trap
         return 0
     fi
 
-    # Выполняем
-    local start=$SECONDS
-    if bash "$stage_file"; then
-        mark_success "$stage_name"
-        ok "[${stage_name}] — done (${SECONDS}s)"
-        return 0
-    else
-        mark_failed "$stage_name"
-        err "[${stage_name}] — FAILED (${SECONDS}s)"
+    # Source stage (triggers stage_* function)
+    if ! source "$stage_file" 2>&1 | tee -a "${LOG_DIR}/${stage}.log"; then
+        end=$(date +%s%3N)
+        duration=$((end - start))
+        err "[$stage] execution failed"
+        mark_stage "$stage" "FAILED"
+        _emit_event "$stage" "FAILED" "$duration"
+        restore_trap
+
+        # Recovery policy
+        case "$RECOVERY_POLICY" in
+            skip)
+                warn "Skipping $stage due to RECOVERY_POLICY=skip"
+                mark_stage "$stage" "SKIPPED"
+                return 0
+                ;;
+            retry)
+                warn "Retry policy not yet implemented — abort"
+                ;;
+            abort|*)
+                set_safe_mode
+                return 1
+                ;;
+        esac
         return 1
     fi
-}
 
-# ════════════════════════════════════════════════
-# PIPELINE RUNNER
-# ════════════════════════════════════════════════
+    # Call stage function if defined
+    local stage_func="stage_${stage#stage}"
+    if declare -f "$stage_func" >/dev/null 2>&1; then
+        if "$stage_func" 2>&1 | tee -a "${LOG_DIR}/${stage}.log"; then
+            end=$(date +%s%3N)
+            duration=$((end - start))
+            mark_stage "$stage" "SUCCESS"
+            _emit_event "$stage" "SUCCESS" "$duration"
+        else
+            end=$(date +%s%3N)
+            duration=$((end - start))
+            mark_stage "$stage" "FAILED"
+            _emit_event "$stage" "FAILED" "$duration"
+            restore_trap
+
+            if [[ "$RECOVERY_POLICY" == "skip" ]]; then
+                mark_stage "$stage" "SKIPPED"
+                return 0
+            fi
+            set_safe_mode
+            return 1
+        fi
+    else
+        # No function — just source, consider done
+        mark_stage "$stage" "SUCCESS"
+        _emit_event "$stage" "SUCCESS" "$(( $(date +%s%3N) - start ))"
+    fi
+
+    restore_trap
+    return 0
+}
 
 run_pipeline() {
     local failed=0
     local skipped=0
-    local ran=0
+    local total=${#STAGE_REGISTRY[@]}
 
-    for stage_name in "${STAGE_REGISTRY[@]}"; do
-        # Check skip list
-        if [[ " ${SKIP_STAGES:-} " =~ " ${stage_name} " ]]; then
-            mark_skipped "$stage_name"
-            ok "[${stage_name}] — skipped by SKIP_STAGES"
-            skipped=$((skipped + 1))
-            continue
-        fi
+    log "═══ PIPELINE START ($total stages) ═══"
 
-        if run_stage "$stage_name"; then
-            ran=$((ran + 1))
-        else
-            if [[ "${CONTINUE_ON_ERROR:-0}" == "1" ]]; then
-                warn "Continuing after failure: ${stage_name}"
-                failed=$((failed + 1))
-            else
-                err "Pipeline aborted at: ${stage_name}"
-                err "Resume: SCRIPT_ROOT=${SCRIPT_ROOT} bash ${ENGINEDIR}/runner.sh --resume"
-                return 1
-            fi
+    # Acquire lock
+    if ! acquire_lock; then
+        err "Cannot acquire lock — another run in progress"
+        return 1
+    fi
+
+    # Validate before run
+    if ! validate_all; then
+        err "Pipeline validation failed"
+        release_lock
+        return 1
+    fi
+
+    local i=1
+    for stage in "${STAGE_REGISTRY[@]}"; do
+        log "[$i/$total] Stage: $stage"
+        if ! run_stage "$stage"; then
+            err "Pipeline aborted at $stage"
+            failed=1
+            break
         fi
+        ((i++)) || true
     done
 
-    ok "Pipeline: ${ran} ran, ${skipped} skipped, ${failed} failed"
-    [[ $failed -gt 0 ]] && return 1 || return 0
-}
+    release_lock
 
-# ════════════════════════════════════════════════
-# RESUME — перезапуск failed stages
-# ════════════════════════════════════════════════
+    if ((failed)); then
+        log "═══ PIPELINE FAILED ═══"
+        log "Run: --resume to recover from last success"
+        return 1
+    else
+        log "═══ PIPELINE COMPLETE ═══"
+        return 0
+    fi
+}
 
 resume_pipeline() {
-    local count=0
-    local resumed=0
-    local failed=0
+    local failed_stages=()
 
-    # Собираем все failed stages
-    local failed_names=()
-    for sf in "${STATE_DIR}"/.*.state; do
-        [[ -f "$sf" ]] || continue
-        local name
-        name=$(basename "$sf" | sed 's/^\.//; s/\.state$//')
-        if [[ "$(get_state "$name")" == "$STATE_FAILED" ]]; then
-            failed_names+=("$name")
+    log "═══ RESUME MODE ═══"
+
+    for state_file in "${STATE_DIR}"/*.state; do
+        [[ -f "$state_file" ]] || continue
+        local stage state
+        stage=$(basename "$state_file" .state)
+        state=$(cat "$state_file")
+
+        if [[ "$state" == "FAILED" ]]; then
+            failed_stages+=("$stage")
         fi
     done
 
-    count=${#failed_names[@]}
-    if [[ $count -eq 0 ]]; then
-        ok "No failed stages to resume"
+    if (( ${#failed_stages[@]} == 0 )); then
+        ok "No failed stages — pipeline complete"
         return 0
     fi
 
-    info "Resuming ${count} failed stage(s): ${failed_names[*]}"
-    export FORCE=1
+    log "Will retry: ${failed_stages[*]}"
 
-    for name in "${failed_names[@]}"; do
-        if run_stage "$name"; then
-            resumed=$((resumed + 1))
+    for stage in "${failed_stages[@]}"; do
+        # Restore checkpoint if exists
+        if [[ -f "${CHECKPOINT_DIR}/${stage}.checkpoint" ]]; then
+            restore_checkpoint "$stage"
+        fi
+
+        if run_stage "$stage"; then
+            ok "[$stage] recovered"
         else
-            failed=$((failed + 1))
+            err "[$stage] recovery failed"
+            return 1
         fi
     done
 
-    ok "Resume: ${resumed} recovered, ${failed} still failing"
-    [[ $failed -gt 0 ]] && return 1 || return 0
+    ok "Resume complete"
+    return 0
 }
 
-# ════════════════════════════════════════════════
-# LIST STAGES
-# ════════════════════════════════════════════════
-
-list_stages() {
-    echo ""
-    echo "=== Stage Registry (${#STAGE_REGISTRY[@]} stages) ==="
-    local total=0 done=0 fail=0 skip=0 pend=0
-    for stage_name in "${STAGE_REGISTRY[@]}"; do
-        total=$((total + 1))
-        local s
-        s=$(get_state "$stage_name")
-        local icon="[     ]"
-        case "$s" in
-            SUCCESS)  icon="[DONE ]"; done=$((done + 1)) ;;
-            FAILED)   icon="[FAIL ]"; fail=$((fail + 1)) ;;
-            SKIPPED)  icon="[SKIP ]"; skip=$((skip + 1)) ;;
-            RUNNING)  icon="[RUN  ]" ;;
-            *)        icon="[     ]"; pend=$((pend + 1)) ;;
-        esac
-        local stage_file
-        stage_file=$(ls "${STAGEDIR}"/stage*_"${stage_name}".sh 2>/dev/null | head -1)
-        local num="?"
-        [[ -n "$stage_file" ]] && num=$(basename "$stage_file" | sed 's/stage//; s/_.*//')
-        printf "%s %-2s %s\n" "$icon" "$num" "$stage_name"
-    done
-    echo ""
-    echo "Total: ${total} | Done: ${done} | Fail: ${fail} | Skip: ${skip} | Pending: ${pend}"
-}
-
-# ════════════════════════════════════════════════
-# DRY-RUN ALL
-# ════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# DRY RUN / VALIDATE
+# ═══════════════════════════════════════════════════════════
 
 dry_run_all() {
+    log "═══ DRY-RUN PREVIEW ($ENV_COUNT stages) ═══"
     export DRY_RUN=1
-    info "DRY-RUN mode — no changes will be made"
-    run_pipeline
+
+    local i=1
+    for stage in "${STAGE_REGISTRY[@]}"; do
+        local file
+        file=$(get_stage_file "${i}" 2>/dev/null || echo "not found")
+        if [[ -f "$file" ]]; then
+            ok "[DRY-RUN] $i: $stage → $(basename "$file")"
+        else
+            warn "[DRY-RUN] $i: $stage → FILE NOT FOUND"
+        fi
+        ((i++)) || true
+    done
+
+    log "DRY-RUN complete — no changes made"
+    return 0
 }
 
-# ════════════════════════════════════════════════
-# VALIDATE
-# ════════════════════════════════════════════════
-
 validate_pipeline() {
+    log "═══ PIPELINE VALIDATION ═══"
+
     local errors=0
-    info "Validating runtime..."
-    if ! source "${LIBDIR}/runtime.sh" 2>/dev/null; then
-        err "Runtime validation FAILED"
-        return 1
+
+    # Lock check
+    if [[ -f "$LOCK_FILE" ]]; then
+        warn "Lock file exists: $LOCK_FILE"
+    else
+        ok "Lock: clean"
     fi
 
-    info "Validating stages..."
-    for stage_name in "${STAGE_REGISTRY[@]}"; do
-        local sf
-        sf=$(ls "${STAGEDIR}"/stage*_"${stage_name}".sh 2>/dev/null | head -1)
-        if [[ -z "$sf" ]]; then
-            err "MISSING: stage file for '${stage_name}'"
-            errors=$((errors + 1))
-        elif ! bash -n "$sf" 2>/dev/null; then
-            err "SYNTAX ERROR: ${sf}"
-            errors=$((errors + 1))
+    # Directory checks
+    for dir in "$STAGEDIR" "$STATE_DIR" "$LOG_DIR" "$CHECKPOINT_DIR"; do
+        if [[ -d "$dir" ]]; then
+            ok "Dir OK: $dir"
+        else
+            err "Missing dir: $dir"
+            ((errors++))
         fi
     done
 
-    if [[ $errors -eq 0 ]]; then
-        ok "All ${#STAGE_REGISTRY[@]} stages valid"
-        return 0
+    # Stage count
+    local stage_count
+    stage_count=$(find "$STAGEDIR" -maxdepth 1 -name "stage*.sh" 2>/dev/null | wc -l)
+    ok "Stages found: $stage_count/${#STAGE_REGISTRY[@]}"
+
+    # Syntax check
+    local syntax_errors=0
+    for f in "${STAGEDIR}"/*.sh; do
+        [[ -f "$f" ]] || continue
+        if ! bash -n "$f" 2>/dev/null; then
+            err "SYNTAX ERROR: $(basename "$f")"
+            ((syntax_errors++))
+        fi
+    done
+
+    if ((syntax_errors > 0)); then
+        err "$syntax_errors syntax error(s)"
+        ((errors += syntax_errors))
     else
-        err "${errors} validation error(s)"
-        return 1
+        ok "All stage syntax: valid"
     fi
+
+    # DAG check
+    if ! validate_dag; then
+        ((errors++))
+    fi
+
+    if ((errors == 0)); then
+        ok "Pipeline validation: PASSED"
+    else
+        err "Pipeline validation: $errors error(s)"
+    fi
+
+    return $((errors > 0 ? 1 : 0))
 }
 
-# ─── CLI PARSER ─────────────────────────────────
+list_stages() {
+    local i=1
+    echo ""
+    echo "Stage Registry (${#STAGE_REGISTRY[@]} stages):"
+    echo "────────────────────────────────────────────"
 
-_usage() {
-    cat << 'EOF'
-engine/runner.sh v9.1
+    for stage in "${STAGE_REGISTRY[@]}"; do
+        local file state
+        file=$(get_stage_file "$i" 2>/dev/null || echo "")
+        state=$(get_stage_state "$stage")
+        local state_icon
+        case "$state" in
+            SUCCESS) state_icon="✅" ;;
+            FAILED)  state_icon="❌" ;;
+            SKIPPED) state_icon="⏭" ;;
+            RUNNING) state_icon="🔄" ;;
+            PENDING) state_icon="⏳" ;;
+            RETRYING) state_icon="🔁" ;;
+            *)       state_icon="──" ;;
+        esac
 
-Usage: sudo ./runner.sh [COMMAND] [OPTIONS]
-
-Commands:
-  run           Run all stages (default)
-  validate      Validate pipeline
-  dry-run       Preview all stages
-  list          Show stage registry
-  resume        Re-run failed stages
-  run <name>    Run single stage
-
-Options:
-  --force       Re-run completed stages
-  --skip STAGE  Skip named stage(s)
-  --continue    Continue on failure
-  --dry-run     Preview mode
-
-Examples:
-  sudo ./runner.sh                  # full run
-  sudo DRY_RUN=1 ./runner.sh         # preview
-  sudo ./runner.sh --resume          # resume failures
-  sudo ./runner.sh --validate       # check all
-  sudo ./runner.sh run docker        # single stage
-EOF
+        if [[ -n "$file" && -f "$file" ]]; then
+            printf "%s %2d. %-25s %s\n" "$state_icon" "$i" "$stage" "$state"
+        else
+            printf "⚠️ %2d. %-25s %s\n" "$i" "$stage" "NOT FOUND"
+        fi
+        ((i++)) || true
+    done
+    echo "────────────────────────────────────────────"
+    echo "Run log: $RUN_LOG"
+    echo ""
 }
 
-_main() {
-    local cmd="${1:-run}"; shift || true
+# ═══════════════════════════════════════════════════════════
+# ROLLBACK
+# ═══════════════════════════════════════════════════════════
 
-    case "$cmd" in
-        run)        run_pipeline "$@" ;;
-        validate)   validate_pipeline ;;
-        dry-run)    dry_run_all ;;
-        list)       list_stages ;;
-        resume)     resume_pipeline ;;
-        *)
-            # Попытка найти stage по имени
-            if [[ -f "${STAGEDIR}"/stage*_"${cmd}".sh ]]; then
-                run_stage "$cmd"
-            else
-                err "Unknown command: $cmd"; _usage; return 1
-            fi
-            ;;
-    esac
+rollback_last() {
+    local last_stage="$1"
+    warn "Rolling back: $last_stage"
+    rollback_stage "$last_stage"
+    mark_stage "$last_stage" "PENDING"
 }
 
-[[ "${BASH_SOURCE[0]}" != "${0}" ]] || _main "$@"
+rollback_all() {
+    warn "Full rollback requested"
+    rollback_pipeline
+    rm -f "${STATE_DIR}"/*.state 2>/dev/null || true
+    ok "All state cleared"
+}

@@ -1,190 +1,185 @@
 #!/usr/bin/env bash
 #===============================================
-# lib/runtime.sh v9.1 — Production Runtime Core
+# lib/runtime.sh v9.2 — Production Grade Runtime
 #===============================================
-# Single Source of Truth для всех путей и состояния.
-# Используется ВО ВСЕХ stage-файлах.
-#
-# Usage:
-#   source /path/to/lib/runtime.sh
-#   bootstrap                    # подключить все библиотеки
-#   run_stage "docker"           # запустить stage
-#   is_done "docker" || do_it    # проверить состояние
+# Single Source of Truth for all paths + execution engine.
+# Full idempotency, dry-run, checkpoint, rollback, fault isolation.
 #===============================================
 
-set -euo pipefail
+[[ -n "${_RUNTIME_SOURCED:-}" ]] && return 0 || _RUNTIME_SOURCED=1
 
-[[ -n "${_RUNTIME_SOURCED:-}" ]] && return 0 || export _RUNTIME_SOURCED=1
+# ═══════════════════════════════════════════════════════════
+# CONFIGURATION
+# ═══════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════
-# VERSION & METADATA
-# ═══════════════════════════════════════════════════════
+# Resolved paths (must work from any cwd)
+pushd "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && SCRIPT_ROOT="$(pwd)" && popd >/dev/null 2>&1
 
-export RUNTIME_VERSION="9.1.0"
-export RUNTIME_SCHEMA="2.0"
+readonly SCRIPT_ROOT="${SCRIPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+readonly LIBDIR="${SCRIPT_ROOT}/lib"
+readonly STAGEDIR="${SCRIPT_ROOT}/stages"
+readonly ENGINEDIR="${SCRIPT_ROOT}/engine"
+readonly STATE_DIR="${SCRIPT_ROOT}/state"
+readonly LOG_DIR="${SCRIPT_ROOT}/logs"
+readonly CHECKPOINT_DIR="${STATE_DIR}/checkpoints"
+readonly SNAPSHOT_DIR="${STATE_DIR}/snapshots"
+readonly LOCK_FILE="/var/lock/pop-os-setup.lock"
+readonly METADATA_FILE="${STATE_DIR}/.metadata"
 
-# ═══════════════════════════════════════════════════════
-# PATH RESOLUTION — symlink-aware, env-overridable
-# ═══════════════════════════════════════════════════════
+# Runtime flags
+DRY_RUN="${DRY_RUN:-0}"
+SAFE_MODE="${SAFE_MODE:-0}"
+RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_$$}"
+RECOVERY_POLICY="${RECOVERY_POLICY:-abort}"  # abort | skip | retry
+VERBOSE="${VERBOSE:-0}"
 
-_resolve_root() {
-    local src="${BASH_SOURCE[0]:-$(pwd)/runtime.sh}"
-    local dir
-
-    if [[ -L "$src" ]]; then
-        dir=$(dirname "$(readlink -f "$src")")
-        cd "$dir/../.." && pwd -P
-    elif [[ -f "$src" ]]; then
-        cd "$(dirname "$src")/.." && pwd -P
-    elif [[ -n "${SCRIPT_ROOT:-}" ]]; then
-        echo "$SCRIPT_ROOT"
-    else
-        echo "$(pwd)"
-    fi
-}
-
-# Экспортируем пути (можно переопределить через env)
-export SCRIPT_ROOT="${SCRIPT_ROOT:-$(_resolve_root)}"
-export LIBDIR="${SCRIPT_ROOT}/lib"
-export STAGEDIR="${SCRIPT_ROOT}/stages"
-export ENGINEDIR="${SCRIPT_ROOT}/engine"
-export SCHEMADIR="${SCRIPT_ROOT}/schema"
-
-# State & runtime dirs
-export STATE_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/pop-os-setup/state"
-export RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/pop-os-setup"
-export LOG_DIR="${LOG_DIR:-/tmp/pop-os-setup}"
-
-mkdir -p "$STATE_DIR" "$RUN_DIR" "$LOG_DIR" 2>/dev/null || true
-
-# ═══════════════════════════════════════════════════════
-# STRUCTURED LOGGING
-# ═══════════════════════════════════════════════════════
-
-export LOGFILE="${LOG_DIR}/pop-os-setup-$(date +%Y-%m-%d_%H-%M-%S).log"
-log() {
-    local level="${1:-INFO}"
-    local msg="${2:-}"
-    local ts
-    ts=$(date +%F_%T)
-    echo "[${ts}] [${level}] ${msg}" | tee -a "$LOGFILE" 2>/dev/null || echo "[${ts}] [${level}] ${msg}"
-}
-ok()   { log "OK" "$*"; }
-warn() { log "WARN" "$*" >&2; }
-err()  { log "ERROR" "$*" >&2; }
-step() { log "STEP" "$1 | Stage $2"; }
-info() { log "INFO" "$*"; }
-
-# ═══════════════════════════════════════════════════════
-# BOOTSTRAP — подключить все библиотеки
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# BOOTSTRAP — Load dependencies
+# ═══════════════════════════════════════════════════════════
 
 bootstrap() {
     local errors=0
 
-    for lib in logging.sh utils.sh; do
-        local lp="${LIBDIR}/${lib}"
-        if [[ -f "$lp" ]]; then
-            source "$lp"
-        else
-            err "MISSING: ${lp}"; errors=$((errors + 1))
-        fi
+    # Ensure state dirs
+    for d in "$STATE_DIR" "$CHECKPOINT_DIR" "$SNAPSHOT_DIR" "$LOG_DIR"; do
+        mkdir -p "$d" 2>/dev/null || {
+            echo "FATAL: Cannot create $d" >&2; ((errors++))
+        }
     done
 
-    if [[ -f "${ENGINEDIR}/runner.sh" ]]; then
-        source "${ENGINEDIR}/runner.sh"
+    # Load logging
+    if [[ -f "${LIBDIR}/logging.sh" ]]; then
+        source "${LIBDIR}/logging.sh" || ((errors++))
     else
-        warn "ENGINE: runner.sh not found at ${ENGINEDIR}/runner.sh"
+        echo "FATAL: logging.sh not found at $LIBDIR" >&2; ((errors++))
     fi
 
-    return $errors
+    # Load utils
+    if [[ -f "${LIBDIR}/utils.sh" ]]; then
+        source "${LIBDIR}/utils.sh" || ((errors++))
+    else
+        echo "FATAL: utils.sh not found at $LIBDIR" >&2; ((errors++))
+    fi
+
+    ((errors == 0)) || {
+        echo "Bootstrap failed with $errors error(s)"
+        set_safe_mode
+        return 1
+    }
+
+    log "Bootstrap OK — RUN_ID=$RUN_ID"
+    return 0
 }
 
-# ═══════════════════════════════════════════════════════
-# STAGE GUARD — защита от повторного sourcing
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# SAFE MODE — Restrict operations on failure
+# ═══════════════════════════════════════════════════════════
 
-export _STAGE_SOURCED="${_STAGE_SOURCED:-yes}"
-
-stage_guard() {
-    [[ "${_STAGE_SOURCED:-}" == "yes" ]] && return 0 || true
+set_safe_mode() {
+    export SAFE_MODE=1
+    log "SAFE_MODE enabled — only --list/--validate/--dry-run allowed"
 }
 
-# ═══════════════════════════════════════════════════════
-# STATE MANAGEMENT — idempotency core
-# ═══════════════════════════════════════════════════════
-
-# PENDING / RUNNING / SUCCESS / FAILED / SKIPPED
-
-STATE_PENDING="PENDING"
-STATE_RUNNING="RUNNING"
-STATE_SUCCESS="SUCCESS"
-STATE_FAILED="FAILED"
-STATE_SKIPPED="SKIPPED"
-
-_get_state_file() {
-    echo "${STATE_DIR}/.$1.state"
+is_safe_mode() {
+    [[ "${SAFE_MODE:-0}" == "1" ]]
 }
 
-get_state() {
-    local name="$1"
-    local sf="$(_get_state_file "$name")"
-    [[ -f "$sf" ]] && cat "$sf" || echo "$STATE_PENDING"
+check_safe_mode() {
+    if is_safe_mode; then
+        local cmd="${1:-}"
+        case "$cmd" in
+            --list|--validate|--dry-run|--help|-h) return 0 ;;
+            *)
+                err "SAFE_MODE: operation '$cmd' blocked"
+                err "Allowed: --list | --validate | --dry-run | --help"
+                return 1
+                ;;
+        esac
+    fi
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════
+# LOCK MANAGEMENT — Prevent concurrent runs
+# ═══════════════════════════════════════════════════════════
+
+acquire_lock() {
+    local max_age="${1:-3600}"  # default 1h stale
+
+    if [[ -f "$LOCK_FILE" ]]; then
+        local pid age
+        pid=$(cat "$LOCK_FILE" 2>/dev/null)
+        age=$(stat -c %Y "$LOCK_FILE" 2>/dev/null || echo 0)
+        local now=$(date +%s)
+
+        if [[ -d "/proc/$pid" ]] && [[ $((now - age)) -lt $max_age ]]; then
+            err "Lock held by PID $pid (age=$((now - age))s)"
+            err "Remove lock: sudo rm $LOCK_FILE"
+            return 1
+        else
+            warn "Stale lock detected (PID=$pid, age=$((now - age))s) — removing"
+            rm -f "$LOCK_FILE"
+        fi
+    fi
+
+    echo "$$" > "$LOCK_FILE"
+    log "Lock acquired: PID=$$"
+    return 0
+}
+
+release_lock() {
+    local pid
+    pid=$(cat "$LOCK_FILE" 2>/dev/null)
+    if [[ "$pid" == "$$" ]]; then
+        rm -f "$LOCK_FILE"
+        log "Lock released"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════
+# STATE MACHINE
+# ═══════════════════════════════════════════════════════════
+
+# States: PENDING | RUNNING | SUCCESS | FAILED | SKIPPED | RETRYING
+
+get_stage_state() {
+    local stage="$1"
+    local state_file="${STATE_DIR}/${stage}.state"
+    if [[ -f "$state_file" ]]; then
+        cat "$state_file"
+    else
+        echo "PENDING"
+    fi
+}
+
+mark_stage() {
+    local stage="$1"
+    local state="$2"
+    local state_file="${STATE_DIR}/${stage}.state"
+    echo "$state" > "$state_file"
+    log "[${stage}] → $state"
 }
 
 is_done() {
-    local name="${1:-}"
-    [[ -z "$name" ]] && return 1
-    [[ "$(get_state "$name")" == "$STATE_SUCCESS" ]] && return 0 || return 1
+    local stage="$1"
+    local state
+    state=$(get_stage_state "$stage")
+    [[ "$state" == "SUCCESS" ]] || [[ "$state" == "SKIPPED" ]]
 }
 
 is_failed() {
-    local name="${1:-}"
-    [[ -z "$name" ]] && return 1
-    [[ "$(get_state "$name")" == "$STATE_FAILED" ]] && return 0 || return 1
+    local stage="$1"
+    [[ "$(get_stage_state "$stage")" == "FAILED" ]]
 }
 
 is_running() {
-    local name="${1:-}"
-    [[ -z "$name" ]] && return 1
-    [[ "$(get_state "$name")" == "$STATE_RUNNING" ]] && return 0 || return 1
+    local stage="$1"
+    [[ "$(get_stage_state "$stage")" == "RUNNING" ]]
 }
 
-mark_running() {
-    local name="${1:-}"
-    [[ -z "$name" ]] && return 1
-    echo "$STATE_RUNNING" > "$(_get_state_file "$name")"
-}
-
-mark_success() {
-    local name="${1:-}"
-    [[ -z "$name" ]] && return 1
-    echo "$STATE_SUCCESS" > "$(_get_state_file "$name")"
-    # Удаляем failed-маркер если был
-    rm -f "${STATE_DIR}/.$name.failed" 2>/dev/null || true
-}
-
-mark_failed() {
-    local name="${1:-}"
-    [[ -z "$name" ]] && return 1
-    echo "$STATE_FAILED" > "$(_get_state_file "$name")"
-    touch "${STATE_DIR}/.$name.failed" 2>/dev/null || true
-}
-
-mark_skipped() {
-    local name="${1:-}"
-    [[ -z "$name" ]] && return 1
-    echo "$STATE_SKIPPED" > "$(_get_state_file "$name")"
-}
-
-reset_state() {
-    local name="${1:-}"
-    rm -f "$(_get_state_file "$name")" "${STATE_DIR}/.$name.failed" 2>/dev/null || true
-}
-
-# ═══════════════════════════════════════════════════════
-# DRY-RUN AWARENESS
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# DRY-RUN
+# ═══════════════════════════════════════════════════════════
 
 is_dry_run() {
     [[ "${DRY_RUN:-0}" == "1" ]]
@@ -192,102 +187,332 @@ is_dry_run() {
 
 check_dry_run() {
     if is_dry_run; then
-        ok "[DRY-RUN] $*"
-        return 1  # возвращаем 1 чтобы вызывающий знал что это dry-run
-    fi
-    return 0  # продолжаем
-}
-
-# ═══════════════════════════════════════════════════════
-# STAGE RESOLUTION — number/name → file path
-# ═══════════════════════════════════════════════════════
-
-resolve_stage() {
-    local input="${1:-}"
-    local num=""
-    local name=""
-    local file=""
-
-    # "7" или "07" → padding
-    if [[ "$input" =~ ^[0-9]+$ ]]; then
-        num=$(printf '%02d' "$input" 2>/dev/null)
-        file=$(ls "${STAGEDIR}"/stage"${num}"_*.sh 2>/dev/null | head -1)
-    else
-        # Имя → поиск
-        file=$(ls "${STAGEDIR}"/stage*_"${input}".sh 2>/dev/null | head -1)
-    fi
-
-    if [[ -z "$file" || ! -f "$file" ]]; then
-        err "Stage not found: ${input}"
+        log "[DRY-RUN] Would execute: $*"
         return 1
     fi
-
-    echo "$file"
     return 0
 }
 
-# ═══════════════════════════════════════════════════════
-# PIPELINE VALIDATION
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# RUN CMD — Dry-run aware executor
+# ═══════════════════════════════════════════════════════════
+
+run_cmd() {
+    local stage="$1"
+    shift
+    local cmd=("$@")
+    local start end duration
+
+    if is_dry_run; then
+        log "[DRY-RUN] $stage: ${cmd[*]}"
+        mark_stage "$stage" "SUCCESS"
+        return 0
+    fi
+
+    mark_stage "$stage" "RUNNING"
+    log "[$stage] EXEC: ${cmd[*]}"
+    start=$(date +%s%3N)
+
+    if "${cmd[@]}" 2>&1 | tee -a "${LOG_DIR}/${stage}.log"; then
+        end=$(date +%s%3N)
+        duration=$((end - start))
+        log "[$stage] DONE (${duration}ms)"
+        mark_stage "$stage" "SUCCESS"
+        _emit_event "$stage" "SUCCESS" "$duration"
+        return 0
+    else
+        end=$(date +%s%3N)
+        duration=$((end - start))
+        log "[$stage] FAILED (${duration}ms)"
+        mark_stage "$stage" "FAILED"
+        _emit_event "$stage" "FAILED" "$duration"
+        return 1
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════
+# OBSERVABILITY — JSONL structured logs
+# ═══════════════════════════════════════════════════════════
+
+readonly RUN_LOG="${LOG_DIR}/run_${RUN_ID}.jsonl"
+
+_emit_event() {
+    local stage="$1"
+    local status="$2"
+    local duration_ms="${3:-0}"
+    local timestamp
+    timestamp=$(date -Iseconds)
+
+    printf '%s\n' "{\"run_id\":\"${RUN_ID}\",\"stage\":\"${stage}\",\"status\":\"${status}\",\"timestamp\":\"${timestamp}\",\"duration_ms\":${duration_ms}}" >> "$RUN_LOG"
+}
+
+get_run_log() {
+    echo "$RUN_LOG"
+}
+
+# ═══════════════════════════════════════════════════════════
+# CHECKPOINT SYSTEM
+# ═══════════════════════════════════════════════════════════
+
+save_checkpoint() {
+    local stage="$1"
+    local checkpoint="${CHECKPOINT_DIR}/${stage}.checkpoint"
+    local metadata="${CHECKPOINT_DIR}/${stage}.meta"
+
+    if is_dry_run; then
+        log "[DRY-RUN] save_checkpoint: $stage"
+        return 0
+    fi
+
+    local ts
+    ts=$(date -Iseconds)
+    echo "{\"stage\":\"$stage\",\"timestamp\":\"$ts\",\"run_id\":\"$RUN_ID\"}" > "$checkpoint"
+    log "[$stage] checkpoint saved"
+}
+
+restore_checkpoint() {
+    local stage="$1"
+    local checkpoint="${CHECKPOINT_DIR}/${stage}.checkpoint"
+
+    if [[ -f "$checkpoint" ]]; then
+        log "[$stage] checkpoint found — restore context"
+        cat "$checkpoint"
+        return 0
+    else
+        err "[$stage] no checkpoint found"
+        return 1
+    fi
+}
+
+get_last_success() {
+    local stage_num="${1:-1}"
+
+    for ((i=stage_num-1; i>=1; i--)); do
+        local name
+        name=$(get_stage_name "$i")
+        if is_done "$name"; then
+            echo "$name"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ═══════════════════════════════════════════════════════════
+# SNAPSHOT — Pre-stage backup
+# ═══════════════════════════════════════════════════════════
+
+snapshot_stage() {
+    local stage="$1"
+    local snapshot="${SNAPSHOT_DIR}/${stage}.tar.gz"
+
+    if is_dry_run; then
+        log "[DRY-RUN] snapshot: $stage"
+        return 0
+    fi
+
+    if [[ -d /etc/pop-os-setup ]]; then
+        tar -czf "$snapshot" -C / etc/pop-os-setup 2>/dev/null || true
+        log "[$stage] snapshot: $snapshot"
+    fi
+}
+
+rollback_stage() {
+    local stage="$1"
+    local snapshot="${SNAPSHOT_DIR}/${stage}.tar.gz"
+
+    if [[ ! -f "$snapshot" ]]; then
+        warn "[$stage] no snapshot to rollback"
+        return 1
+    fi
+
+    if is_dry_run; then
+        log "[DRY-RUN] rollback: $stage from $snapshot"
+        return 0
+    fi
+
+    tar -xzf "$snapshot" -C / 2>/dev/null || true
+    log "[$stage] rollback completed"
+}
+
+rollback_pipeline() {
+    log "ROLLBACK: reverting all stages"
+
+    for state_file in "${STATE_DIR}"/*.state; do
+        [[ -f "$state_file" ]] || continue
+        local stage
+        stage=$(basename "$state_file" .state)
+        rollback_stage "$stage"
+    done
+
+    log "ROLLBACK: complete"
+}
+
+# ═══════════════════════════════════════════════════════════
+# FAULT ISOLATION — Trap + recovery
+# ═══════════════════════════════════════════════════════════
+
+CURRENT_STAGE="${CURRENT_STAGE:-}"
+
+stage_error_handler() {
+    local line="${1:-0}"
+    local stage="${CURRENT_STAGE:-unknown}"
+
+    err "ERROR in $stage at line $line"
+    _emit_event "$stage" "CRASHED" "0"
+
+    case "$RECOVERY_POLICY" in
+        skip)
+            warn "RECOVERY_POLICY=skip — mark $stage SKIPPED and continue"
+            mark_stage "$stage" "SKIPPED"
+            ;;
+        retry)
+            warn "RECOVERY_POLICY=retry — will retry $stage"
+            mark_stage "$stage" "RETRYING"
+            ;;
+        abort|*)
+            err "RECOVERY_POLICY=abort — stop pipeline"
+            set_safe_mode
+            ;;
+    esac
+}
+
+install_trap() {
+    trap 'stage_error_handler $LINENO' ERR
+}
+
+restore_trap() {
+    trap - ERR
+}
+
+# ═══════════════════════════════════════════════════════════
+# STAGE RESOLUTION
+# ═══════════════════════════════════════════════════════════
+
+resolve_stage() {
+    local input="$1"
+
+    if [[ -f "${STAGEDIR}/${input}.sh" ]]; then
+        echo "${STAGEDIR}/${input}.sh"
+        return 0
+    fi
+
+    # Try as name
+    local found
+    found=$(find "${STAGEDIR}" -maxdepth 1 -name "*${input}*.sh" 2>/dev/null | head -1)
+    if [[ -n "$found" ]]; then
+        echo "$found"
+        return 0
+    fi
+
+    return 1
+}
+
+get_stage_name() {
+    local num="$1"
+    local file
+    file=$(find "${STAGEDIR}" -maxdepth 1 -name "stage${num}_*.sh" 2>/dev/null | head -1)
+    basename "$file" .sh
+}
+
+get_stage_file() {
+    local num="$1"
+    find "${STAGEDIR}" -maxdepth 1 -name "stage${num}_*.sh" 2>/dev/null | head -1
+}
+
+# ═══════════════════════════════════════════════════════════
+# VALIDATION
+# ═══════════════════════════════════════════════════════════
 
 validate_all() {
     local errors=0
-    local count=0
-    for f in "${STAGEDIR}"/stage*.sh; do
-        [[ -f "$f" ]] || continue
-        count=$((count + 1))
-        if ! bash -n "$f" 2>/dev/null; then
-            err "SYNTAX FAIL: $f"
-            errors=$((errors + 1))
+
+    # Check lib files
+    for lib in logging.sh utils.sh; do
+        if [[ ! -f "${LIBDIR}/${lib}" ]]; then
+            err "Missing: ${LIBDIR}/${lib}"
+            ((errors++))
         fi
     done
-    if [[ $errors -eq 0 ]]; then
-        ok "All ${count} stages syntax-valid"
-        return 0
-    else
-        err "${errors}/${count} stages have errors"
-        return 1
-    fi
-}
 
-validate_runtime() {
-    local errors=0
-    for lib in logging.sh utils.sh; do
-        [[ -f "${LIBDIR}/${lib}" ]] || { err "MISSING: ${lib}"; errors=$((errors + 1)); }
+    # Check SCRIPT_ROOT
+    if [[ ! -d "$SCRIPT_ROOT" ]]; then
+        err "Invalid SCRIPT_ROOT: $SCRIPT_ROOT"
+        ((errors++))
+    fi
+
+    # Check stages dir
+    if [[ ! -d "$STAGEDIR" ]]; then
+        err "Missing stages directory: $STAGEDIR"
+        ((errors++))
+    fi
+
+    # Syntax check all stages
+    local stage_errors=0
+    for stage_file in "${STAGEDIR}"/*.sh; do
+        [[ -f "$stage_file" ]] || continue
+        if ! bash -n "$stage_file" 2>/dev/null; then
+            err "SYNTAX ERROR: $stage_file"
+            ((stage_errors++))
+        fi
     done
-    [[ -f "${ENGINEDIR}/runner.sh" ]] || { err "MISSING: runner.sh"; errors=$((errors + 1)); }
-    return $errors
-}
 
-# ═══════════════════════════════════════════════════════
-# RUN COMMAND — dry-run aware executor
-# ═══════════════════════════════════════════════════════
-
-run_cmd() {
-    local label="${1:-}"
-    local cmd="${2:-}"
-    shift 2 || true
-
-    if is_dry_run; then
-        ok "[DRY-RUN] Would execute: ${cmd}"
-        return 0
+    if ((stage_errors > 0)); then
+        err "$stage_errors stage(s) have syntax errors"
+        ((errors += stage_errors))
     fi
 
-    info "Executing: ${label}"
-    if eval "$cmd" "$@"; then
-        ok "Done: ${label}"
-        return 0
-    else
-        err "Failed: ${label} (exit $?)"
-        return 1
+    if is_safe_mode; then
+        warn "SAFE_MODE: blocking full execution"
+        ((errors++))
     fi
+
+    if ((errors == 0)); then
+        ok "Validation passed — pipeline ready"
+    fi
+
+    return $((errors > 0 ? 1 : 0))
 }
 
-# ═══════════════════════════════════════════════════════
-# EXPORT для дочерних процессов
-# ═══════════════════════════════════════════════════════
+validate_dependency() {
+    local stage="$1"
+    local before_file="${STAGEDIR}/${stage}.before"
 
-export -f bootstrap stage_guard is_done is_failed is_running
-export -f mark_running mark_success mark_failed mark_skipped reset_state
-export -f is_dry_run check_dry_run
-export -f resolve_stage validate_all validate_runtime run_cmd
+    if [[ -f "$before_file" ]]; then
+        while read -r dep; do
+            [[ -z "$dep" ]] && continue
+            if ! is_done "$dep"; then
+                err "Dependency not met: $stage requires $dep"
+                return 1
+            fi
+        done < "$before_file"
+    fi
+    return 0
+}
+
+validate_dag() {
+    local errors=0
+    log "DAG validation (no cycles check)"
+
+    for before_file in "${STAGEDIR}"/*.before; do
+        [[ -f "$before_file" ]] || continue
+        local stage
+        stage=$(basename "$before_file" .before)
+
+        while read -r dep; do
+            [[ -z "$dep" ]] && continue
+            if [[ ! -f "${STAGEDIR}/${dep}.sh" ]]; then
+                err "Broken dependency: $stage → $dep (not found)"
+                ((errors++))
+            fi
+        done < "$before_file"
+    done
+
+    return $((errors > 0 ? 1 : 0))
+}
+
+# ═══════════════════════════════════════════════════════════
+# INIT — Bootstrap on source
+# ═══════════════════════════════════════════════════════════
+
+bootstrap
