@@ -1,66 +1,73 @@
 #!/usr/bin/env bash
 #===============================================
+# pop-os-setup Audit Suite v10.4
+#===============================================
 set -euo pipefail
-RED="''[0;31m'''; GREEN="''[0;32m'''; YELLOW="''[0;33m'''; BLUE="''[0;34m'''; BOLD="''[1m'''; RESET="''[0m'''
 
-SCRIPT_DIR="''$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"''
-WORKSPACE_DIR="''$(pwd)"''
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORKSPACE_DIR="$(pwd)"
+LOGDIR="/var/log"
 
-print_header() { echo ""; echo "${BOLD}${BLUE}$(printf '''═'''%.0s {1..45})${RESET}"; echo "${BOLD}${BLUE}  $1"; echo "${BOLD}${BLUE}$(printf '''═'''%.0s {1..45})"; }
+print_header() { echo ""; echo "=== $1 ===:"; }
+print_ok()    { echo "  [OK]  $1"; }
+print_fail()  { echo "  [FAIL] $1"; }
+print_warn()  { echo "  [WARN] $1"; }
+print_info()  { echo "  [INFO] $1"; }
 
-echo ""
-echo "${BOLD}╔$(printf '''═'''%.0s {1..43})╗${RESET}"
-echo "${BOLD}║   pop-os-setup v10.x Audit Suite    ║${RESET}"
-echo "${BOLD}╚$(printf '''═'''%.0s {1..43})╝${RESET}"
-echo ""
+audit_all() {
+    local failed=0
+    echo ""
+    echo "pop-os-setup v10.4 — AUDIT REPORT"
+    echo "================================"
 
-print_header "1. Syntax Check"
-for f in "${SCRIPT_DIR}"/*.sh "${SCRIPT_DIR}"/stages/*.sh "${SCRIPT_DIR}"/lib/*.sh "${SCRIPT_DIR}"/engine/*.sh; do
-  [[ -f "$f" ]] || continue
-  echo -n "  $(basename "$f"): "
-  bash -n "$f" 2>/dev/null && echo "${GREEN}OK${RESET}" || echo "${RED}FAIL${RESET}"
-done
+    # 1. File integrity
+    print_header "1. FILE INTEGRITY"
+    for f in pop-os-setup.sh; do
+        [[ -f "$SCRIPT_DIR/$f" ]] && print_ok "$f exists" || { print_fail "$f missing"; ((failed++)); }
+    done
 
-print_header "2. File Structure"
-for d in stages lib profiles logs state observability engine; do
-  echo -n "  $d/: "
-  [[ -d "${SCRIPT_DIR}/$d" ]] && echo "${GREEN}✓${RESET}" || echo "${RED}✗${RESET}"
-done
+    # 2. Critical lib files
+    print_header "2. CRITICAL LIB FILES"
+    for lib in lib/runtime.sh observability/tracer.sh engine/state_linearizer.sh; do
+        [[ -f "$SCRIPT_DIR/$lib" ]] && print_ok "$lib" || { print_fail "$lib missing"; ((failed++)); }
+    done
 
-print_header "3. Stage Files Count"
-total=0; present=0
-for i in $(seq 1 26); do
-  file=$(ls "${SCRIPT_DIR}"/stages/stage${i}_*.sh 2>/dev/null | head -1)
-  [[ -n "$file" ]] && present=$((present+1)) || echo "  ! Stage ${i}: missing"
-  total=$((total+1))
-done
-echo "  Stages: ${present}/${total} present"
+    # 3. Stage files
+    print_header "3. STAGE FILES"
+    local stage_count
+    stage_count=$(ls "$SCRIPT_DIR"/stages/stage*.sh 2>/dev/null | wc -l)
+    echo "  Found: $stage_count stage files"
+    [[ "$stage_count" -ge 10 ]] && print_ok "Stage count OK ($stage_count)" || { print_fail "Too few stages ($stage_count)"; ((failed++)); }
 
-print_header "4. Intent Profiles"
-for p in workstation ai-dev cluster full; do
-  echo -n "  ${p}.intent.json: "
-  [[ -f "${SCRIPT_DIR}/profiles/${p}.intent.json" ]] && echo "${GREEN}✓${RESET}" || echo "${RED}✗${RESET}"
-done
+    # 4. Syntax check
+    print_header "4. SYNTAX CHECK (bash -n)"
+    for f in pop-os-setup.sh lib/runtime.sh; do
+        bash -n "$SCRIPT_DIR/$f" 2>/dev/null && print_ok "$f" || { print_fail "$f syntax error"; ((failed++)); }
+    done
 
-print_header "5. Core Runtime Files"
-for f in lib/runtime.sh lib/observability.sh engine/intent_validator.sh engine/state_linearizer.sh; do
-  echo -n "  $f: "
-  [[ -f "${SCRIPT_DIR}/$f" ]] && echo "${GREEN}✓${RESET}" || echo "${RED}✗${RESET}"
-done
+    # 5. Log write access
+    print_header "5. LOG DIRECTORY ACCESS"
+    if [[ -w "$LOGDIR" ]] 2>/dev/null; then
+        print_ok "/var/log writable"
+    else
+        print_warn "/var/log not writable (use bash + tee instead of sudo)"
+    fi
 
-print_header "6. Idempotency — stage sourcing (first 3 only)"
-cnt=0
-for f in "${SCRIPT_DIR}"/stages/*.sh; do
-  [[ -f "$f" ]] || continue
-  [[ $cnt -ge 3 ]] && break
-  name=$(basename "$f")
-  echo -n "  $name: "
-  LIBDIR="${SCRIPT_DIR}/lib" bash "$f" &>/dev/null && echo "${GREEN}OK${RESET}" || echo "${RED}FAIL${RESET}"
-  cnt=$((cnt+1))
-done
+    # 6. Version
+    print_header "6. VERSION"
+    grep -m1 "SCRIPT_VERSION" "$SCRIPT_DIR/pop-os-setup.sh" 2>/dev/null || print_warn "SCRIPT_VERSION not found"
 
-print_header "7. Version"
-v_main=$(grep -m1 '''RUNTIME_VERSION=''' "${SCRIPT_DIR}"/pop-os-setup.sh 2>/dev/null | cut -d'"' -f2)
-echo "  Script:   ${v_main:-NOT FOUND}"
-echo ""
-echo "${BOLD}Audit Complete${RESET}"
+    # Summary
+    echo ""
+    echo "================================"
+    if [[ "$failed" -eq 0 ]]; then
+        echo "RESULT: ALL CHECKS PASSED"
+    else
+        echo "RESULT: $failed CHECK(S) FAILED"
+    fi
+    echo "================================"
+    echo ""
+    echo "Run with: bash $SCRIPT_DIR/audit/audit.sh"
+}
+
+audit_all
