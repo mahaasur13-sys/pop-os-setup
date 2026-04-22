@@ -1,200 +1,184 @@
 #!/usr/bin/env bash
 #===============================================
-# pop-os-setup.sh v9.3 — Production Boot Entry
-#===============================================
-# Modes: --list | --validate | --dry-run | --resume | --rollback | --full
-# SAFE_MODE blocks execution on validation/runtime failure.
-# All paths resolved via lib/runtime.sh
-# Build identity + pipeline fingerprint attached to every run.
+# pop-os-setup.sh v9.4 — Production Installer
+# Observability layer: no silent execution
 #===============================================
 
 set -euo pipefail
-shopt -s inherit_errexit 2>/dev/null || true
 
-# Load runtime (provides all paths, state, logging, trap)
-if [[ -f "${BASH_SOURCE[0]%/*}/lib/runtime.sh" ]]; then
-    source "${BASH_SOURCE[0]%/*}/lib/runtime.sh"
-else
-    echo "FATAL: lib/runtime.sh not found" >&2
-    exit 1
-fi
+# ─── Metadata ────────────────────────────────────────────────────────────────
+readonly RUNTIME_VERSION="v9.4"
+readonly SCRIPT_NAME="pop-os-setup"
+readonly STATE_DIR="${STATE_DIR:-/var/lib/pop-os-setup}"
+readonly LOG_DIR="${LOG_DIR:-/var/log/pop-os-setup}"
 
-# ═══════════════════════════════════════════════════════════
-# BUILD IDENTITY DISPLAY (v9.3)
-# ═══════════════════════════════════════════════════════════
+# ─── Bootstrap ────────────────────────────────────────────────────────────────
+bootstrap() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    LIBDIR="${script_dir}/lib"
+    STAGEDIR="${script_dir}/stages"
 
-show_build_identity() {
-    compute_pipeline_fingerprint "${PROFILE:-default}"
-    echo ""
-    echo "  pop-os-setup ${RUNTIME_VERSION}"
-    echo "  build:       ${BUILD_ID}"
-    echo "  branch:      ${BUILD_BRANCH}"
-    echo "  fingerprint: ${FINGERPRINT_SHORT}"
-    echo "  build time:  ${BUILD_TIME}"
-    echo ""
+    # Source observability FIRST
+    if [[ -f "${LIBDIR}/observability.sh" ]]; then
+        source "${LIBDIR}/observability.sh"
+    fi
+
+    if [[ -f "${LIBDIR}/logging.sh" ]]; then
+        source "${LIBDIR}/logging.sh"
+    fi
+
+    if [[ -f "${LIBDIR}/utils.sh" ]]; then
+        source "${LIBDIR}/utils.sh"
+    fi
+
+    if [[ -f "${LIBDIR}/runtime.sh" ]]; then
+        source "${LIBDIR}/runtime.sh"
+    fi
+
+    init_state_dir
+    init_log_dir
+
+    obs_init "${RUN_ID:-}"
 }
 
-# ═══════════════════════════════════════════════════════════
-# ARGUMENT PARSING
-# ═══════════════════════════════════════════════════════════
+# ─── Main ────────────────────────────────────────────────────────────────────
+main() {
+    bootstrap "$@"
 
-usage() {
-    cat << 'EOF'
-Usage: sudo ./pop-os-setup.sh [MODE] [OPTIONS]
+    obs_emit "banner" "Starting pop-os-setup ${RUNTIME_VERSION}"
 
-Modes:
-  --list      Show all stages and current status
-  --validate  Pre-flight validation (syntax + deps + DAG)
-  --dry-run   Preview execution without changes
-  --resume    Resume from last failed stage
-  --rollback  Rollback last failed stage
-  --full      Run full pipeline (default)
+    log "════════════════════════════════════"
+    log "  pop-os-setup ${RUNTIME_VERSION}"
+    log "  Profile:   ${PROFILE:-full}"
+    log "  Run ID:    ${RUN_ID:-unknown}"
+    log "  Stage:     ${START_STAGE:-1} → ${END_STAGE:-99}"
+    log "  Safe mode: ${SAFE_MODE:-0}"
+    log "════════════════════════════════════"
 
-Options:
-  --profile NAME   Use profile (workstation|ai-dev|full|cluster)
-  --policy POL     Recovery policy: abort|skip|retry (default: abort)
-  --verbose        Enable verbose output
-  --run-id ID      Custom run identifier
-  -h, --help       Show this help
+    local stages_run=0 stages_skipped=0 stages_failed=0
+    local start_ts=$(date +%s)
 
-Examples:
-  sudo ./pop-os-setup.sh                    # Full run
-  sudo ./pop-os-setup.sh --dry-run         # Preview
-  sudo ./pop-os-setup.sh --resume          # Recover
-  sudo ./pop-os-setup.sh --validate         # Check system
-EOF
-    exit 0
+    for stage_num in $(seq "${START_STAGE:-1}" "${END_STAGE:-99}"); do
+        # Stop at END_STAGE
+        [[ $stage_num -gt ${END_STAGE:-99} ]] && break
+
+        # Find stage file
+        local stage_file
+        stage_file=$(find_stage_file "$stage_num" 2>/dev/null || true)
+
+        if [[ -z "$stage_file" || ! -f "$stage_file" ]]; then
+            continue
+        fi
+
+        local stage_name
+        stage_name=$(derive_stage_name "$stage_file")
+        CURRENT_STAGE="$stage_name"
+
+        obs_stage_begin "$stage_num" "$stage_name" "99"
+        obs_progress "$stage_num" 26 "$stage_name"
+
+        local stage_exit=0
+        if [[ "${DRY_RUN:-0}" == "1" ]]; then
+            ok "DRY-RUN: $stage_name (would execute)"
+            obs_stage_end "$stage_num" "$stage_name" "skipped"
+            ((stages_skipped++)) || true
+        else
+            if source "$stage_file" 2>&1; then
+                local stage_fn="stage_${stage_num}_${stage_name}"
+                if declare -f "$stage_fn" >/dev/null 2>&1; then
+                    if "$stage_fn" 2>&1; then
+                        ok "$stage_name: OK"
+                        obs_stage_end "$stage_num" "$stage_name" "success"
+                        obs_op_end "stage_${stage_num}" "ok"
+                        ((stages_run++)) || true
+                    else
+                        err "$stage_name: FAIL"
+                        obs_stage_end "$stage_num" "$stage_name" "failure"
+                        obs_err "Stage $stage_num failed with exit code $?"
+                        ((stages_failed++)) || true
+                        handle_failure "$stage_num" "$stage_name"
+                    fi
+                else
+                    ok "$stage_name: loaded (no main function)"
+                    obs_stage_end "$stage_num" "$stage_name" "skipped"
+                    ((stages_skipped++)) || true
+                fi
+            else
+                err "$stage_name: SOURCE FAIL"
+                obs_stage_end "$stage_num" "$stage_name" "failure"
+                ((stages_failed++)) || true
+            fi
+        fi
+    done
+
+    local duration=$(( $(date +%s) - start_ts ))
+
+    obs_summary \
+        "$([ $stages_failed -eq 0 ] && echo "success" || echo "partial_failure")" \
+        "$stages_run" "$stages_skipped" "$stages_failed" "$duration"
+
+    return $((stages_failed > 0 ? 1 : 0))
 }
 
+# ─── Failure handler ─────────────────────────────────────────────────────────
+handle_failure() {
+    local stage_num="$1"
+    local stage_name="$2"
+
+    obs_err "Stage $stage_num ($stage_name) failed"
+
+    if [[ "${SAFE_MODE:-0}" == "1" || "${CONTINUE_ON_ERROR:-0}" != "1" ]]; then
+        obs_emit "run_aborted" "Aborting due to stage failure (safe mode)"
+        exit 1
+    fi
+
+    obs_warn "Continuing despite failure (CONTINUE_ON_ERROR=1)"
+}
+
+# ─── Parse args ───────────────────────────────────────────────────────────────
 parse_args() {
-    MODE="${MODE:-full}"
+    DRY_RUN=0
+    START_STAGE=1
+    END_STAGE=99
+    PROFILE="${PROFILE:-}"
+    SAFE_MODE=0
+    CONTINUE_ON_ERROR=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --list)       MODE=list ;;
-            --validate)   MODE=validate ;;
-            --dry-run)    MODE=dry-run ;;
-            --resume)     MODE=resume ;;
-            --rollback)   MODE=rollback ;;
-            --full)       MODE=full ;;
-            --profile)    PROFILE="$2"; shift ;;
-            --policy)     RECOVERY_POLICY="$2"; shift ;;
-            --verbose)    VERBOSE=1 ;;
-            --run-id)     RUN_ID="$2"; shift ;;
-            -h|--help)    usage ;;
-            *)            err "Unknown argument: $1"; usage ;;
+            --dry-run) DRY_RUN=1 ;;
+            --stage) START_STAGE="$2"; shift ;;
+            --end-stage) END_STAGE="$2"; shift ;;
+            --profile) PROFILE="$2"; shift ;;
+            --safe) SAFE_MODE=1 ;;
+            --continue) CONTINUE_ON_ERROR=1 ;;
+            --run-id) export RUN_ID="$2"; shift ;;
+            --help|-h) usage; exit 0 ;;
+            *) ;;
         esac
         shift
     done
 }
 
-# ═══════════════════════════════════════════════════════════
-# MAIN ENTRY POINT
-# ═══════════════════════════════════════════════════════════
+usage() {
+    cat << 'USAGE'
+  pop-os-setup.sh [options]
 
-main() {
-    log "═══════════════════════════════════════════"
-    log "  pop-os-setup ${RUNTIME_VERSION} — Production Installer"
-    log "═══════════════════════════════════════════"
+  --dry-run         Preview mode (no changes)
+  --stage N         Start from stage N
+  --end-stage N     Stop at stage N
+  --profile NAME    Profile: workstation|ai-dev|cluster|full
+  --safe            Abort on any stage failure
+  --continue        Keep going despite failures
+  --run-id ID       Set explicit run ID
+  --help            Show this help
 
-    show_build_identity
-
-    log "  Mode:     $MODE"
-    log "  Run ID:   $RUN_ID"
-    log "  Profile:  ${PROFILE:-default}"
-    log "  Policy:   $RECOVERY_POLICY"
-    log "  Safe:     ${SAFE_MODE:-0}"
-    log "  Dry:      ${DRY_RUN:-0}"
-    log "═══════════════════════════════════════════"
-
-    # Attach identity to run metadata (reproducibility layer)
-    if [[ -n "$RUN_ID" ]]; then
-        attach_run_identity "$RUN_ID" "${PROFILE:-default}" >/dev/null 2>&1 || true
-        log_execution_event "$RUN_ID" "pipeline_start" "" "info"
-    fi
-
-    case "$MODE" in
-        list)
-            source "${ENGINEDIR}/runner.sh" 2>/dev/null || true
-            list_stages
-            ;;
-
-        validate)
-            if validate_all && validate_dag; then
-                ok "System validation: PASSED"
-                exit 0
-            else
-                err "System validation: FAILED"
-                err "SAFE_MODE enabled — only safe operations allowed"
-                set_safe_mode
-                exit 1
-            fi
-            ;;
-
-        dry-run)
-            export DRY_RUN=1
-            source "${ENGINEDIR}/runner.sh" 2>/dev/null || true
-            dry_run_all
-            ;;
-
-        resume)
-            source "${ENGINEDIR}/runner.sh"
-            resume_pipeline
-            ;;
-
-        rollback)
-            source "${ENGINEDIR}/runner.sh"
-            rollback_last "$(find "${STATE_DIR}" -name '*.state' -newer "${STATE_DIR}"/*.checkpoint 2>/dev/null | head -1 | xargs -I{} basename {} .state || echo '')"
-            ;;
-
-        full)
-            # Acquire lock first
-            if ! acquire_lock; then
-                err "Another instance is running. Remove lock: sudo rm $LOCK_FILE"
-                exit 1
-            fi
-
-            # Runtime validation
-            if ! validate_all; then
-                err "Pre-flight validation failed"
-                set_safe_mode
-                release_lock
-                err "SAFE_MODE enabled — use --list, --validate, --dry-run only"
-                exit 1
-            fi
-
-            # Load runner
-            source "${ENGINEDIR}/runner.sh"
-
-            # Run pipeline
-            if run_pipeline; then
-                log "═══════════════════════════════════════════"
-                log "  ✅ ALL DONE — pop-os-setup ${RUNTIME_VERSION}"
-                log "═══════════════════════════════════════════"
-                release_lock
-                [[ -n "$RUN_ID" ]] && log_execution_event "$RUN_ID" "pipeline_complete" "" "info"
-                exit 0
-            else
-                err "Pipeline failed — run with --resume to recover"
-                err "SAFE_MODE enabled — use --list, --validate, --dry-run only"
-                [[ -n "$RUN_ID" ]] && log_execution_event "$RUN_ID" "pipeline_failed" "" "error"
-                release_lock
-                exit 1
-            fi
-            ;;
-    esac
+  Observability enabled by default (no silent execution).
+USAGE
 }
 
-# Trap cleanup
-trap 'release_lock 2>/dev/null || true' EXIT INT TERM
-
-# ═══════════════════════════════════════════════════════════
-# BOOT
-# ═══════════════════════════════════════════════════════════
-
-MODE="full"
-PROFILE="${PROFILE:-}"
-RUN_ID="${RUN_ID:-$(generate_run_id)}"
-RECOVERY_POLICY="${RECOVERY_POLICY:-abort}"
+# ─── Bootstrap & run ─────────────────────────────────────────────────────────
+bootstrap "$@"
 parse_args "$@"
 main
