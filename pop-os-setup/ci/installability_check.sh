@@ -86,6 +86,7 @@ step1_clone() {
     pass "Repository cloned successfully"
     log "HEAD: $(git rev-parse HEAD)"
     log "Working dir: $(pwd)"
+    TEST_DIR="$(pwd)"
     return 0
 }
 
