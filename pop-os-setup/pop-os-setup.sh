@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 #===============================================
-# pop-os-setup.sh — Deterministic Intent-Driven Provisioning System v11.2
+# pop-os-setup.sh — Deterministic Intent-Driven Provisioning System v11.3
 # Three-layer truth: Intent → CESM → Physical → Reconciliation → Intent
+#===============================================
+# v11.3 HARDENING:
+#   • trap handlers (INT/TERM/ERR)
+#   • require_cmd dependency validation
+#   • safe_download with SHA256
+#   • is_installed / is_done idempotency
+#   • safe_source (no silent failures)
+#   • validate_profile
 #===============================================
 set -euo pipefail
 
-readonly RUNTIME_VERSION="v11.2"
-readonly LOG_CONTRACT_VERSION="v2"
+readonly RUNTIME_VERSION="v11.3"
 readonly STATEDIR="${STATEDIR:-/var/lib/pop-os-setup}"
 readonly INTENT_DIR="${INTENT_DIR:-./profiles}"
 readonly POLICY="${POLICY:-intent-warn}"
@@ -15,7 +22,6 @@ readonly MODE="${MODE:-full}"
 PROFILE="${PROFILE:-full}"
 DRY_RUN="${DRY_RUN:-0}"
 SELECTED_STAGE="${SELECTED_STAGE:-}"
-# LOG_MODE: deterministic | system | user — resolved BEFORE sourcing lib
 export LOG_MODE="${LOG_MODE:-deterministic}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,28 +29,150 @@ LIBDIR="${SCRIPT_DIR}/lib"
 STAGEDIR="${SCRIPT_DIR}/stages"
 PROFILEDIR="${SCRIPT_DIR}/profiles"
 
-# Source logging FIRST so LOGDIR is initialized from LOG_MODE
-# (get_log_target() needs SCRIPT_DIR which is set above)
+# Source logging first
 source "${LIBDIR}/logging.sh" 2>/dev/null || true
 
-# Now LOGDIR is set — use it for state and mkdir
 mkdir -p "$STATEDIR" 2>/dev/null || true
 
-# ── Emit logging mode event ──────────────────────────────────────────────────
+# Emit log mode event
 _log_mode_event() {
-    local msg="$1"
-    local entry="[$(date -Iseconds)] log.mode.selected|${LOG_MODE}|logdir=${LOGDIR}|euid=${EUID:-$(id -u)}|dry=${DRY_RUN:-0}"
+    local entry="[$(date -Iseconds)] log.mode.selected|${LOG_MODE}|euid=${EUID:-$(id -u)}|dry=${DRY_RUN:-0}"
     echo "$entry" >> "${LOGDIR}/setup.jsonl" 2>/dev/null || true
 }
 _log_mode_event "selected"
 
-# ── Logging (fallback if logging.sh not sourced) ─────────────────────────────
+# Fallback logging
 : "${LOGDIR:=${SCRIPT_DIR}/logs}"
 log()  { echo -e "[$(date '+%H:%M:%S')] $*" | tee -a "${LOGDIR}/setup.log" 2>/dev/null || echo -e "[$(date '+%H:%M:%S')] $*"; }
 step() { log ""; log "══ $1 ══ [Stage $2]"; }
 ok()   { log "[OK]  $*"; }
 warn() { log "[WARN] $*"; }
 err()  { echo -e "[$(date '+%H:%M:%S')] [ERR]  $*" >&2; }
+
+# ═══════════════════════════════════════════════
+# v11.3 HARDENING — Core Safety Functions
+# ═══════════════════════════════════════════════
+
+# ── TRAP HANDLERS ────────────────────────────────────
+cleanup() {
+    echo ""
+    echo "[CLEANUP] Interrupt received, cleaning up..."
+    pkill -P $$ 2>/dev/null || true
+    exit 130
+}
+
+report_error() {
+    echo "[FATAL] Error at line $LINENO — command: $BASH_COMMAND"
+    exit 1
+}
+
+# Install trap handlers
+trap cleanup INT TERM
+trap 'report_error' ERR
+
+# ── DEPENDENCY VALIDATION ─────────────────────────────
+require_cmd() {
+    local cmd="$1"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "[FATAL] Missing dependency: $cmd"
+        echo "[FATAL] Install required tool before running this script."
+        exit 10
+    fi
+}
+
+check_dependencies() {
+    local required=(git curl wget awk sed grep)
+    for cmd in "${required[@]}"; do
+        require_cmd "$cmd"
+    done
+
+    # Optional warnings
+    command -v docker >/dev/null 2>&1 || warn "docker not found (optional)"
+    command -v nvidia-smi >/dev/null 2>&1 || warn "nvidia-smi not found (optional)"
+}
+
+# ── SAFE DOWNLOAD (SHA256) ────────────────────────────
+safe_download() {
+    local url="$1"
+    local expected_hash="$2"
+    local output="$3"
+
+    if [[ -z "$url" || -z "$output" ]]; then
+        echo "[FATAL] safe_download: url and output are required"
+        return 1
+    fi
+
+    curl -fsSL "$url" -o "$output" || {
+        echo "[ERROR] Download failed: $url"
+        return 1
+    }
+
+    # If hash provided, verify
+    if [[ -n "$expected_hash" && "$expected_hash" != "none" ]]; then
+        local actual_hash
+        actual_hash=$(sha256sum "$output" | awk '{print $1}')
+        if [[ "$actual_hash" != "$expected_hash" ]]; then
+            echo "[FATAL] SHA256 mismatch!"
+            echo "  Expected: $expected_hash"
+            echo "  Actual:   $actual_hash"
+            rm -f "$output"
+            exit 20
+        fi
+        echo "[VERIFY] SHA256 OK: $output"
+    fi
+}
+
+# ── IDEMPOTENCY ──────────────────────────────────────
+is_installed() {
+    dpkg -s "$1" >/dev/null 2>&1
+}
+
+install_pkg() {
+    local pkg="$1"
+    if is_installed "$pkg"; then
+        echo "[SKIP] $pkg already installed"
+        return 0
+    fi
+    apt-get install -y "$pkg"
+}
+
+# ── STAGE STATE (done markers) ───────────────────────
+: "${STATE_DIR:=${SCRIPT_DIR}/state}"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+mark_done() {
+    touch "${STATE_DIR}/${1}.done"
+}
+
+is_done() {
+    [[ -f "${STATE_DIR}/${1}.done" ]]
+}
+
+# ── SAFE SOURCE ──────────────────────────────────────
+safe_source() {
+    local file="$1"
+    if [[ ! -f "$file" ]]; then
+        echo "[ERROR] Stage file not found: $file"
+        return 1
+    fi
+    if [[ ! -r "$file" ]]; then
+        echo "[ERROR] Stage file not readable: $file"
+        return 1
+    fi
+    source "$file"
+}
+
+# ── PROFILE VALIDATION ───────────────────────────────
+validate_profile() {
+    case "$PROFILE" in
+        workstation|ai-dev|cluster|full) return 0 ;;
+        *)
+            echo "[FATAL] Invalid profile: '$PROFILE'"
+            echo "Valid profiles: workstation, ai-dev, cluster, full"
+            exit 30
+            ;;
+    esac
+}
 
 # ─── Argument parsing ──────────────────────────────────────────────────────
 show_usage() {
@@ -59,6 +187,7 @@ Options:
   --policy <mode>      intent-warn|intent-enforce|intent-strict
   --intent-dir <path>  Directory containing .intent.json files
   --reconcile          Run physical reconciliation check
+  --log-mode <mode>    deterministic|system|user (default: deterministic)
   --help, -h           Show this help
 
 Profiles:
@@ -88,20 +217,20 @@ while [[ $# -gt 0 ]]; do
         --profile) PROFILE="$2"; shift 2 ;;
         --stage) SELECTED_STAGE="${2#0}"; shift 2 ;;
         --intent-dir) INTENT_DIR="$2"; shift 2 ;;
-        --help|-h) show_usage; exit 0 ;;
         --log-mode)
             LOG_MODE="$2"; export LOG_MODE
             case "$LOG_MODE" in
                 deterministic|system|user) log "[INFO] LOG_MODE set: $LOG_MODE" ;;
-                *) warn "LOG_MODE must be: deterministic|system|user (defaulting to deterministic)"
+                *) warn "LOG_MODE must be: deterministic|system|user (defaulting)"
                      LOG_MODE="deterministic"; export LOG_MODE ;;
             esac
             shift 2 ;;
+        --help|-h) show_usage; exit 0 ;;
         *) warn "Unknown option: $1"; shift ;;
     esac
 done
 
-# ─── Stage loader ────────────────────────────────────────────────────────
+# ─── Stage loader (safe_source) ───────────────────────
 load_stage() {
     local num="$1"
     local padded_num
@@ -115,7 +244,7 @@ load_stage() {
 
         [[ -f "$candidate" ]] || continue
 
-        source "$candidate" 2>/dev/null || {
+        safe_source "$candidate" || {
             err "Failed to source: $candidate"
             return 1
         }
@@ -126,7 +255,7 @@ load_stage() {
     return 1
 }
 
-# ─── SANDBOX INTEGRITY GATE (v11.2) ─────────────────────────────────────────
+# ─── SANDBOX INTEGRITY GATE (v11.2) ──────────────────
 run_integrity_gate() {
     local gate_script="${SCRIPT_DIR}/engine/sandbox_integrity_check.sh"
 
@@ -138,13 +267,13 @@ run_integrity_gate() {
         fi
         log "✅ Integrity gate PASSED — proceeding"
     else
-        warn "⚠ Integrity gate not found — skipping (not recommended)"
+        warn "⚠ Integrity gate not found — skipping"
     fi
 
     return 0
 }
 
-# ─── Execution ────────────────────────────────────────────────────────────
+# ─── Execution ────────────────────────────────────────
 run_stage() {
     local num="$1"
     local stage_fn="stage_${num}"
@@ -174,7 +303,24 @@ run_stage() {
     fi
 }
 
+# ─── MAIN ─────────────────────────────────────────────
 main() {
+    echo ""
+    echo "═══════════════════════════════════════"
+    echo "  pop-os-setup v${RUNTIME_VERSION}"
+    echo "  Profile: ${PROFILE}"
+    echo "  Mode: ${MODE}"
+    echo "  Policy: ${POLICY}"
+    echo "  Sandbox: ENABLED (v11.2)"
+    echo "═══════════════════════════════════════"
+    echo ""
+
+    # Validate profile first
+    validate_profile
+
+    # Check dependencies
+    check_dependencies
+
     # dry-run skips integrity gate
     if [[ "$DRY_RUN" != 1 ]]; then
         if ! run_integrity_gate; then
