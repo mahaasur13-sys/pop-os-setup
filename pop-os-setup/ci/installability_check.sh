@@ -173,7 +173,7 @@ step4_version() {
 
     # Check required engine files exist
     local required_files=(
-        "engine/sandbox_runtime.sh"
+        "engine/sandbox/sandbox_runtime.sh"
         "engine/sandbox/syscall_policy.sh"
         "engine/deterministic.sh"
         "engine/sandbox/replay_v2.sh"
