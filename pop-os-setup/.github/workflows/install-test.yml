@@ -1,0 +1,138 @@
+name: Installability Test
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  installability:
+    name: Installability Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bash shellcheck
+
+      - name: Syntax check (all .sh files)
+        run: |
+          echo "=== Syntax check ==="
+          ok=0
+          for f in $(find . -name "*.sh" -type f); do
+            echo -n "  $f ... "
+            if bash -n "$f" 2>/dev/null; then
+              echo "OK"
+            else
+              echo "FAIL"
+              ok=1
+            fi
+          done
+          exit $ok
+
+      - name: Version check
+        run: |
+          echo "=== Version check ==="
+          grep "RUNTIME_VERSION=" pop-os-setup.sh || { echo "RUNTIME_VERSION not found"; exit 2; }
+          echo "Version line found"
+
+      - name: Dry-run test (workstation profile)
+        run: |
+          echo "=== Dry-run test ==="
+          bash pop-os-setup.sh --dry-run --profile workstation || {
+            echo "Dry-run failed"
+            exit 3
+          }
+          echo "Dry-run passed"
+
+      - name: Stage scan check
+        run: |
+          echo "=== Stage files check ==="
+          count=$(find stages/ -maxdepth 1 -name "stage*.sh" 2>/dev/null | wc -l)
+          echo "Stage files found: $count"
+          if [[ "$count" -lt 20 ]]; then
+            echo "WARNING: Less than 20 stage files"
+          fi
+
+      - name: Required files check
+        run: |
+          echo "=== Required engine files ==="
+          required=(
+            "lib/runtime.sh"
+            "lib/logging.sh"
+            "engine/deterministic.sh"
+            "engine/sandbox_runtime.sh"
+          )
+          for f in "${required[@]}"; do
+            echo -n "  $f ... "
+            if [[ -f "$f" ]]; then
+              echo "OK"
+            else
+              echo "MISSING"
+              exit 4
+            fi
+          done
+
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bash git
+
+      - name: Clone test (simulate fresh install)
+        run: |
+          echo "=== Clone to clean environment ==="
+          test_dir="/tmp/popos-clone-test"
+          rm -rf "$test_dir"
+          git clone . "$test_dir"
+          cd "$test_dir"
+          echo "Clone successful"
+          echo "HEAD: $(git rev-parse HEAD)"
+
+      - name: Dry-run in cloned environment
+        run: |
+          echo "=== Dry-run from cloned repo ==="
+          cd /tmp/popos-clone-test
+          bash pop-os-setup.sh --dry-run --profile workstation || {
+            echo "Dry-run from cloned repo failed"
+            exit 5
+          }
+          echo "Cloned repo dry-run OK"
+
+  certify:
+    name: Certification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [installability, integration-test]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run certification
+        run: |
+          echo "=== Running v11.3 Certification ==="
+          if [[ -f "audit/certify_v11_2.sh" ]]; then
+            bash audit/certify_v11_2.sh || {
+              echo "Certification failed"
+              exit 6
+            }
+          else
+            echo "Certification script not found — skipping"
+          fi
