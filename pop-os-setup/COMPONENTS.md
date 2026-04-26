@@ -1,311 +1,496 @@
-# pop-os-setup — Описание компонентов установки
+# pop-os-setup: Компоненты и программы установки
 
-> Формируется автоматически из `stages/` и `profiles/`
-> ver: v11.3 | profiles: workstation · ai-dev · full · cluster
+## Описание
 
----
+`pop-os-setup` — это скрипт детерминированной идемпотентной установки для Pop!_OS / Ubuntu. Он автоматизирует настройку рабочей станции за ~15–25 минут, проходя 26 стадий установки.
 
-## 📋 Общая архитектура
-
-**Система:** Deterministic Intent-Driven Provisioning — каждая установка проходит через три слоя: **Intent → CESM State → Physical → Reconciliation → Intent**.
-
-**Поток:**
-```
-Intent (.intent.json) → [CESM State] → Physical → [Reconciliation] → Intent validation
-```
-
-**Профили:**
-
-| Профиль | Назначение | CUDA | Docker | AI Stack | K8s | Slurm | SSH | Tailscale | Hardening |
-|---------|-----------|------|--------|----------|-----|-------|-----|-----------|-----------|
-| `workstation` | AI/Dev workstation для одного пользователя | — | ✅ | ✅ | — | — | — | — | ✅ |
-| `ai-dev` | ML-исследователь, GPU-нагрузки | ✅ | ✅ | ✅ | — | — | — | — | ✅ |
-| `full` | Power user / home lab / cluster node | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `cluster` | Вычислительный кластер (k3s + Slurm) | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ |
+> Все загрузки — безопасные: никаких `curl | sh`. Каждый пакет сначала скачивается, проверяется по SHA256, затем устанавливается локально.
 
 ---
 
-## 🗂️ Стадии установки (Stages)
+## Профили установки
 
-### Этап 1 — Подготовка
+Профиль определяет, какие компоненты будут установлены. Задаётся флагом `--profile`.
+
+| Профиль | Назначение | CUDA | Docker | AI Stack | VPN | K8s | Hardening |
+|---------|-----------|------|--------|----------|-----|-----|-----------|
+| `workstation` | Разработка / AI Practitioner | ❌ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| `ai-dev` | ML-исследователь / GPU-тяжёлый | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| `full` | Всё включено | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `cluster` | Сервер / кластер | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
+
+---
+
+## Стадии установки
+
+### 🔧 Системные (Stage 01–04)
 
 #### Stage 01 — Pre-flight Checks
-- **Категория:** System
-- **Что делает:** Проверяет структуру проекта, OS-совместимость, права root, место на диске, сетевой доступ, наличие базовых утилит (curl, git, jq)
-- **Результат:** `structure_valid`, `network_ok`, `sudo_ok`, `disk_ok`
-- **Критичность:** REQUIRED (все профили)
+```
+Проверяет: структура файлов, root-доступ, OS (Pop!_OS/Ubuntu), место на диске,
+сетевое подключение, наличие docker/nvim/zsh/kubectl.
+Действует: прерывает установку, если места < 10 ГБ или нет root.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| curl | HTTP-клиент | Скачивание пакетов и зависимостей | REQUIRED |
+| git | Система контроля версий | Клонирование репозиториев | REQUIRED |
+| jq | JSON-парсер | Обработка JSON-состояния (CESM) | REQUIRED |
+
+**Файлы**: `lib/logging.sh`, `lib/utils.sh`, `lib/profiles.sh`, `lib/bootstrap.sh`
+**Контракт**: `provides structure_valid, network_ok, sudo_ok`
 
 ---
 
-#### Stage 02–08 — Auto Repair
-- **Категория:** System
-- **Что делает:** Набор служебных этапов для консистентности (могут включать исправления lib-файлов, профилей, bootstrap-логики)
-- **Критичность:** REQUIRED (все профили)
+#### Stage 02–08 — Auto-Repair (дедупликация + исправления)
+```
+Многоступенчатая система самовосстановления: nvidia-drivers, dev-tools,
+pip/conda, NVIDIA CUDA drivers, oh-my-zsh, Docker, Python AI-стек.
+Каждый stage idempotent (повторный запуск безвреден).
+```
 
 ---
 
-### Этап 2 — Базовая среда
-
-#### Stage 04 — Dev Tools
-- **Категория:** Dev Tools
-- **Что делает:** Установка базовых инструментов разработки: `build-essential`, `git`, `curl`, `wget`, `vim`, `htop`, `ncdu`, `tree`, `jq`, `gdisk`, `smartmontools`
-- **Критичность:** REQUIRED (все профили)
-
----
+### 🖥 Рабочий стол (Stage 05–08)
 
 #### Stage 05 — Zsh + Oh My Zsh
-- **Категория:** Desktop
-- **Что делает:** Устанавливает Zsh как альтернативную оболочку, ставит **Oh My Zsh** (менеджер плагинов для Zsh), добавляет плагины `zsh-autosuggestions` и `zsh-syntax-highlighting`
-- **Зачем:** Удобный терминал с автодополнением и подсветкой синтаксиса
-- **Профиль:** все (workstation, ai-dev, full, cluster)
-- **Критичность:** RECOMMENDED
+```
+Устанавливает: Zsh (оболочка), Oh My Zsh (фреймворк плагинов),
+zsh-autosuggestions, zsh-syntax-highlighting.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| Zsh | Современная оболочка | Замена bash с улучшенным автодополнением | OPTIONAL |
+| Oh My Zsh | Менеджер плагинов | Удобная установка тем и плагинов | OPTIONAL |
+| zsh-autosuggestions | Автодополнение из истории | Быстрый ввод команд | Плагин |
+| zsh-syntax-highlighting | Подсветка синтаксиса | Видишь ошибки до выполнения | Плагин |
+
+**Профиль**: все (workstation, ai-dev, full, cluster)
+**Контракт**: `provides shell_ready`
 
 ---
 
-#### Stage 06 — KDE Plasma
-- **Категория:** Desktop
-- **Что делает:** Установка KDE Plasma (если выбрана)
-- **Профиль:** workstation, ai-dev, full
-- **Критичность:** OPTIONAL (по профилю)
+#### Stage 06 — KDE Plasma Desktop
+```
+Устанавливает: kde-plasma-desktop, plasma-workspace, весь набор KDE-приложений.
+Альтернатива: можно использовать GNOME (по умолчанию в Pop!_OS).
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| kde-plasma-desktop | Рабочий стол KDE Plasma | Полная замена рабочего стола | OPTIONAL |
+| plasma-workspace | Менеджер сессий | Оконный менеджер, панели, виджеты | OPTIONAL |
+
+**Профиль**: workstation, ai-dev, full
 
 ---
 
-#### Stage 07 — Docker
-- **Категория:** Containers
-- **Что делает:** Установка **Docker Engine**, включение systemd-сервиса, добавление текущего пользователя в группу `docker`, включение Docker в автозапуск
-- **Профиль:** workstation, ai-dev, full, cluster
-- **Критичность:** RECOMMENDED
+### 🤖 AI Stack (Stage 08–09)
 
----
+#### Stage 08 — Python + AI-стек
+```
+Устанавливает: Python 3.x, pip, conda/mamba, PyTorch, TensorFlow,
+Jupyter Notebook/Lab, Ollama (локальные LLM).
+```
 
-### Этап 3 — AI Stack
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| Python 3 | Язык программирования | Основной язык ML/AI | REQUIRED |
+| pip | Менеджер пакетов Python | Установка Python-библиотек | REQUIRED |
+| conda/mamba | Менеджер окружений | Изоляция ML-проектов, управление версиями | OPTIONAL |
+| PyTorch | Библиотека машинного обучения | Обучение и инференс нейросетей | AI |
+| TensorRT | Оптимизация inference | Ускорение моделей на GPU | AI |
+| Jupyter Notebook/Lab | Интерактивные блокноты | Разработка и эксперименты с данными | AI |
+| Ollama | Локальные LLM | Запуск открытых моделей (Llama, Mistral) локально | AI |
+| transformers | HF Transformers | Работа с предобученными моделями | AI |
 
-#### Stage 08 — Python + AI Tools
-- **Категория:** AI Stack
-- **Что делает:** Установка Python (если нет), `pip`, `venv`, `jupyter`, `ollama` (локальные LLM), `pyenv` (управление версиями Python)
-- **Профиль:** workstation, ai-dev, full
-- **Критичность:** RECOMMENDED
+**Профиль**: ai-dev, full
+**Контракт**: `provides ai_stack_ready, python_ready`
 
 ---
 
 #### Stage 09 — CUDA Toolkit + cuDNN
-- **Категория:** AI Stack
-- **Что делает:** Установка **NVIDIA CUDA Toolkit 12.4** и **cuDNN** через официальный NVIDIA keyring (безопасная загрузка с верификацией SHA256). Настраивает `PATH` и `LD_LIBRARY_PATH` в `/etc/profile.d/cuda.sh`
-- **Требует:** NVIDIA GPU + NVIDIA drivers (stage 03)
-- **Профиль:** ai-dev, full
-- **Критичность:** OPTIONAL (по профилю)
+```
+Устанавливает: NVIDIA CUDA keyring → cuda-toolkit-12-4, libcudnn8, libcudnn8-dev.
+Настраивает: PATH, LD_LIBRARY_PATH через /etc/profile.d/cuda.sh
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| CUDA Toolkit 12-4 | Среда разработки GPU NVIDIA | Компиляция и запуск GPU-кода | REQUIRED (ai-dev) |
+| cuDNN | CUDA Deep Neural Network library | Ускорение DNN-операций в PyTorch/TensorFlow | REQUIRED (ai-dev) |
+| CUDA keyring | Пакетный ключ NVIDIA | Аутентификация пакетов из NVIDIA repo | REQUIRED |
+
+**Профиль**: ai-dev, full
+**Требует**: NVIDIA GPU + NVIDIA drivers (stage03)
+**Версия**: CUDA 12.4
+**Контракт**: `provides cuda_ready`
 
 ---
 
-### Этап 4 — Безопасность
+### 🔐 Безопасность (Stage 10)
 
 #### Stage 10 — System Hardening
-- **Категория:** Security
-- **Что делает:**
-  - **UFW firewall** — default deny incoming, allow outgoing; при `ENABLE_SSH=1` открывает порт 22 только из `192.168.10.0/24` и `10.0.0.0/8` (Tailscale)
-  - **fail2ban** — защита SSH от brute-force (3 попытки, бан 30 мин)
-  - **sysctl hardening** — kptr_restrict, dmesg_restrict, ptrace_scope, TCP SYN cookies, отключение source route и ICMP redirects
-  - **unattended-upgrades** — автоматические обновления безопасности
-- **Профиль:** все
-- **Критичность:** RECOMMENDED
+```
+Устанавливает и настраивает: UFW firewall, fail2ban, sysctl hardening,
+unattended-upgrades (автоматические обновления безопасности).
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| UFW (Uncomplicated Firewall) | Firewall | Блокировка входящих соединений по умолчанию | Security |
+| fail2ban | Защита от brute-force | Бан IP после 5 неудачных попыток SSH за 10 мин | Security |
+| unattended-upgrades | Автообновления | Установка патчей безопасности без участия пользователя | Security |
+| sysctl hardening | Настройки ядра | Защита от network-атак, скрытие kernel-инфы | Security |
+
+**Sysctl правила**: `kernel.kptr_restrict=2`, `kernel.dmesg_restrict=1`, `net.ipv4.tcp_syncookies=1`, `net.ipv4.conf.all.rp_filter=1` и др.
+**Профиль**: все
+**Контракт**: `provides security_ready`
 
 ---
 
-#### Stage 24 — SSH + GPG
-- **Категория:** Security
-- **Что делает:** Настройка **OpenSSH server** (при `ENABLE_SSH=1`), генерация/добавление SSH-ключей, настройка **GPG-agent**, SSH-agent forwarding
-- **Профиль:** full, cluster
-- **Критичность:** OPTIONAL (по профилю)
+### 🌐 Сеть (Stage 11, 13–14)
+
+#### Stage 11 — SSH Server
+```
+Устанавливает: openssh-server.
+Включает и запускает сервис ssh.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| OpenSSH Server | SSH-демон | Удалённый доступ к машине по SSH | OPTIONAL |
+
+**Профиль**: все
+**Контракт**: `provides ssh_ready`
 
 ---
 
-### Этап 5 — Networking
+#### Stage 13 — Tailscale VPN
+```
+Устанавливает: tailscale (deb-пакет), включает IP forwarding,
+настраивает Tailscale Funnel (открывает порт 443 через Tailscale).
+Авторизация через TAILSCALE_AUTHKEY или интерактивно.
+```
 
-#### Stage 13 — Tailscale
-- **Категория:** System
-- **Что делает:** Установка и настройка **Tailscale** (VPN от WireGuard) для безопасного доступа к кластеру из любой точки; настраивает SSH-over-Tailscale
-- **Профиль:** full
-- **Критичность:** OPTIONAL (по профилю)
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| Tailscale | VPN-сеть Zero-config | Доступ к машине из любой точки без проброса портов | OPTIONAL |
+| Tailscale Funnel | Публичный доступ | Открывает локальный порт 443 через Tailscale CDN | VPN |
 
----
-
-#### Stage 11 — SSH Setup
-- **Категория:** System
-- **Что делает:** Первичная настройка SSH (sshd_config, ключи)
-- **Профиль:** full, cluster
-- **Критичность:** OPTIONAL
-
----
-
-### Этап 6 — Dev Tools / Optimization
-
-#### Stage 12 — System Optimization
-- **Kategorie:** System
-- **Что делает:** Настройка планировщика I/O (`noop`/`mq-deadline`), transparent hugepages, earlyoom, swappiness, файловые дескрипторы
-- **Критичность:** OPTIONAL
+**Профиль**: full, cluster
+**Требует**: TAILSCALE_AUTHKEY env var
+**Контракт**: `provides vpn_ready`
 
 ---
 
-#### Stage 22 — Neovim
-- **Kategorie:** Dev Tools
-- **Что делает:** Установка Neovim (latest AppImage), настройка базового `init.vim` / `init.lua` с минимум плагинов (файловый менеджер, LSP-клиент, терминал)
-- **Критичность:** OPTIONAL
+#### Stage 14 — k3s Kubernetes
+```
+Устанавливает: k3s (lightweight Kubernetes) в режиме single-node server.
+Копирует kubeconfig в ~/.kube/config целевого пользователя.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| k3s | Kubernetes (single-node) | Оркестрация контейнеров, управление подами | OPTIONAL |
+| kubectl | Kubernetes CLI | Управление кластером из командной строки | k8s |
+
+**Профиль**: full, cluster
+**Требует**: Docker (рекомендуется, но не обязателен)
+**Контракт**: `provides k8s_ready`
 
 ---
 
-### Этап 7 — Container Orchestration
+### 🐳 Контейнеры (Stage 07, 17)
 
-#### Stage 14 — Kubernetes (k3s)
-- **Kategorie:** Containers
-- **Что делает:** Установка **k3s** (lightweight Kubernetes) — master или agent в зависимости от конфигурации; настройка `kubectl` config
-- **Профиль:** full, cluster
-- **Критичность:** OPTIONAL
+#### Stage 07 — Docker Engine
+```
+Устанавливает: Docker Engine через безопасный метод (без curl|sh).
+Добавляет пользователя в группу docker.
+```
 
----
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| Docker Engine | Контейнеризация | Изоляция приложений в контейнерах | REQUIRED |
+| docker CLI | Управление Docker | Команды docker run, docker ps и т.д. | REQUIRED |
 
-#### Stage 17 — Docker Compose
-- **Kategorie:** Containers
-- **Что делает:** Установка `docker-compose` (standalone v2) и `docker-compose-switch` (для переключения между версиями)
-- **Критичность:** OPTIONAL
-
----
-
-### Этап 8 — HPC / Batch
-
-#### Stage 15 — Slurm
-- **Kategorie:** System
-- **Что делает:** Установка и настройка **Slurm** (workload manager для HPC-кластеров) — munge, slurmctld, slurmd
-- **Профиль:** cluster, full
-- **Критичность:** OPTIONAL
+**Профиль**: workstation, ai-dev, full
+**Контракт**: `provides docker_ready`
 
 ---
 
-### Этап 9 — Hardware / Power
+#### Stage 17 — Docker Compose + Portainer
+```
+Устанавливает: Docker Compose v2, Portainer (веб-интерфейс для Docker).
+Добавляет пользователя в группу docker.
+```
 
-#### Stage 16 — Power Tuning
-- **Kategorie:** System
-- **Что делает:** Настройка CPU governor (`performance`/`powersave`), TLP для управления питанием ноутбука (или десктопа), опции NVIDIA persistence mode
-- **Критичность:** OPTIONAL
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| Docker Compose v2 | Оркестрация мультиконтейнерных приложений | docker compose up -d | REQUIRED |
+| Portainer CE | Веб-UI для Docker | Управление контейнерами через браузер | OPTIONAL |
+| Portainer Agent | Агент Portainer | Связь между Portainer и Docker host | Portainer component |
+
+**Профиль**: workstation, ai-dev, full
+**Порты**: 9000 (Portainer), 8000 (Portainer agent)
+**Контракт**: `provides compose_ready, portainer_ready`
+
+---
+
+### 👨‍💻 Инструменты разработки (Stage 04, 22–24)
+
+#### Stage 04 — Dev Tools
+```
+Устанавливает: build-essential, git, curl, wget, tar, gzip,
+mc (Midnight Commander), htop, tree, tmux, gh (GitHub CLI).
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| build-essential | GCC, make, g++ | Компиляция ПО из исходников | REQUIRED |
+| mc | Файловый менеджер | Навигация по файлам в терминале | OPTIONAL |
+| htop | Диспетчер задач | Мониторинг процессов и нагрузки | OPTIONAL |
+| tmux | Терминальный мультиплексор | Сессии, панели, окна в терминале | OPTIONAL |
+| gh | GitHub CLI | Работа с GitHub из командной строки (PR, issue, release) | OPTIONAL |
+| tree | Древовидный вывод директорий | Быстрый просмотр структуры папок | OPTIONAL |
+
+**Профиль**: все
+**Контракт**: `provides dev_tools_ready`
+
+---
+
+#### Stage 22 — Neovim (latest)
+```
+Устанавливает: Neovim (последняя версия, linux64 tarball) → /opt/neovim.
+Создаёт ~/.config/nvim/init.lua с базовой конфигурацией.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| Neovim | Текстовый редактор (Modal UI, vim-потомок) | Основной редактор для разработки | OPTIONAL |
+| init.lua | Конфигурация Neovim | number, relative number, smartindent, clipboard, wildmenu и др. | Config |
+
+**Профиль**: workstation, ai-dev, full
+**Путь**: `/opt/neovim/bin/nvim` → symlink `/usr/local/bin/nvim`
+**Контракт**: `provides editor_ready`
+
+---
+
+#### Stage 24 — SSH Keys + GPG + YubiKey
+```
+Генерирует: ED25519 SSH-ключ с passphrase (сохраняется в ~/.config/pop-os-setup/.ssh_passphrase).
+Настраивает: ~/.ssh/config (github.com, gitlab.com, global defaults).
+Опционально: GPG + YubiKey для SSH-агента.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| SSH Key (ED25519) | Асимметричная пара для SSH | Аутентификация на GitHub/GitLab без пароля | REQUIRED |
+| ssh-agent | Хранитель ключей | Не вводить passphrase каждый раз | SSH component |
+| GPG Agent | GPG-агент для SSH | Использование YubiKey как SSH-ключа | OPTIONAL |
+| YubiKey | Аппаратный ключ безопасности | Защита SSH/GPG-ключей физическим токеном | OPTIONAL |
+
+**Профиль**: workstation, ai-dev, full
+**Контракт**: `provides ssh_keys_ready, gpg_ready`
+
+---
+
+### 📊 Мониторинг (Stage 19–20)
+
+#### Stage 19 — Prometheus + Grafana
+```
+Разворачивает через Docker Compose: Prometheus + Grafana + node-exporter.
+Генерирует случайный пароль для Grafana (сохраняется в ~/.config/pop-os-setup/.grafana_password).
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| Prometheus | Сбор метрик + time-series DB | Мониторинг системы и сервисов | Monitoring |
+| Grafana | Визуализация метрик | Дашборды, графики, алерты | Monitoring |
+| node-exporter | Экспортер метрик хоста | Метрики CPU, RAM, диск, сеть | Monitoring |
+
+**Порты**: 9090 (Prometheus), 3000 (Grafana)
+**Профиль**: full, ai-dev
+**Контракт**: `provides monitoring_ready`
 
 ---
 
 #### Stage 20 — GPU Monitoring
-- **Kategorie:** System
-- **Что делает:** Установка `nvidia-dcgm` (Data Center GPU Manager) для мониторинга GPU в реальном времени; prometheus-экспортер
-- **Профиль:** full, ai-dev (при ENABLE_CUDA=1)
-- **Критичность:** OPTIONAL
+```
+Устанавливает: nvidia-container-toolkit, настраивает NVIDIA Device Plugin для k3s.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| nvidia-container-toolkit | NVIDIA runtime для Docker | Контейнеры с GPU-доступом | GPU |
+| NVIDIA Device Plugin | Kubernetes device plugin | GPU в Kubernetes подах | k8s |
+
+**Профиль**: full (ai-dev опционально)
+**Требует**: NVIDIA GPU + CUDA
 
 ---
 
-### Этап 10 — Observability
-
-#### Stage 19 — Monitoring
-- **Kategorie:** System
-- **Что делает:** Установка **Prometheus** + **Grafana** (или node-exporter) для системного мониторинга
-- **Профиль:** full, workstation, ai-dev
-- **Критичность:** OPTIONAL
-
----
+### ⏰ Автоматизация (Stage 21)
 
 #### Stage 21 — Cron Jobs
-- **Kategorie:** System
-- **Что делает:** Настройка scheduled tasks — очистка логов, проверка обновлений, бэкап состояния
-- **Критичность:** OPTIONAL
+```
+Создаёт запланированные задачи (system crontab + user crontab):
+```
+
+| Задача | Расписание | Команда |
+|--------|-----------|---------|
+| Очистка логов | Пн 04:00 | find /var/log -name '*.log' -mtime +30 -delete |
+| Проверка обновлений | Вт 05:00 | apt-get update && apt-get upgrade -y |
+| Проверка диска | Ежедневно 08:00 | /usr/local/bin/pop-os-disk-check (85% threshold) |
+| Напоминание о бэкапе | Каждые 14 дней 09:00 | systemd-cat напоминание |
+
+**Профиль**: все
+**Скрипты**: `/usr/local/bin/pop-os-disk-check`
+**Контракт**: `provides cron_ready`
 
 ---
 
-### Этап 11 — User Experience
+### 🔋 Питание (Stage 16)
+
+#### Stage 16 — System76 Power + GPU Tuning
+```
+Работает ТОЛЬКО на hardware System76. Настраивает:
+- system76-power graphics nvidia (режим)
+- system76-power profile performance
+- nvidia-smi -pm 1 (persistence mode)
+- nvidia-smi -pl 250 (power limit)
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| system76-power | Утилита управления питанием System76 | Управление GPU-режимом, профилями питания | Platform |
+| NVIDIA persistence mode | Удержание GPU-состояния | Не переинициализировать GPU между запросами | GPU |
+
+**Профиль**: все (но пропускается на не-System76)
+**Контракт**: `provides power_ready`
+
+---
+
+### 💾 Резервное копирование (Stage 25)
+
+#### Stage 25 — Backup & Recovery
+```
+Устанавливает: Timeshift, rsync-backup скрипт.
+Создаёт начальный snapshot Timeshift.
+Настраивает cron для еженедельного бэкапа (Вс 03:00).
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| Timeshift | Системный снапшот-менеджер | Восстановление системы после сбоев | Backup |
+| Timeshift snapshots | Снимки состояния системы | Откат к рабочей конфигурации | Snapshot |
+| pop-os-backup | rsync-бэкап скрипт | Инкрементальный бэкап файлов | Backup |
+| rsync | Синхронизация файлов | Эффективное копирование с инкрементальностью | Backup |
+
+**Расписание**: Вс 03:00 → `/usr/local/bin/pop-os-backup /backup/pop-os`
+**Снимки Timeshift**: monthly×2, weekly×3, daily×5
+**Профиль**: все
+**Контракт**: `provides backup_ready`
+
+---
+
+### 🎯 Дополнительные компоненты
+
+#### Stage 02 — NVIDIA Drivers (из Auto-Repair)
+```
+Устанавливает: проприетарные NVIDIA drivers для GPU.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| NVIDIA Driver | Проприетарный драйвер GPU | GPU-ускорение, CUDA, ML workloads | REQUIRED (AI) |
+
+---
+
+#### Stage 03 — CUDA/NVIDIA (Auto-Repair)
+```
+Проверяет и устанавливает: NVIDIA driver + CUDA toolkit.
+```
+
+---
+
+#### Stage 15 — SLURM (Cluster Workload Manager)
+```
+Устанавливает: SLURM (Simple Linux Utility for Resource Management).
+Планировщик задач для HPC-кластеров.
+```
+
+| Компонент | Что делает | Зачем нужен | Тип |
+|-----------|-----------|-------------|-----|
+| SLURM | Планировщик задач / менеджер кластера | Распределение вычислений по узлам кластера | HPC |
+
+**Профиль**: cluster
+
+---
 
 #### Stage 18 — Dotfiles
-- **Категория:** Desktop
-- **Что делает:** Синхронизация пользовательских dotfiles (`.bashrc`, `.vimrc`, алиасы, git config) через Git-репозиторий dotfiles
-- **Критичность:** OPTIONAL
+```
+Синхронизирует и применяет: пользовательские dotfiles (.bashrc, .zshrc, .gitconfig и т.д.)
+из репозитория или локальной директории.
+```
 
 ---
 
-#### Stage 23 — Notifications
-- **Категория:** Desktop
-- **Что делает:** Настройка уведомлений о завершении установки (через `notify-send` / `ntfy` / Telegram-бот)
-- **Критичность:** OPTIONAL
+#### Stage 23 — Desktop Notifications
+```
+Настраивает: уведомления на рабочем столе для завершения стадий,
+результатов cron-задач, предупреждений.
+```
 
 ---
-
-### Этап 12 — Data Safety
-
-#### Stage 25 — Backup
-- **Категория:** System
-- **Что делает:** Настройка **BorgBackup** или **Restic** для инкрементного бэкапа важных директорий (`/etc`, `$HOME`); cron-расписание
-- **Критичность:** OPTIONAL
-
----
-
-### Этап 13 — Финализация
 
 #### Stage 26 — Final
-- **Категория:** System
-- **Что делает:** Финальная проверка всех сервисов, генерация итогового отчёта, логирование результата в `setup.jsonl`
-- **Критичность:** REQUIRED
+```
+Финальная стадия: проверка всех контрактов CESM,
+генерация итогового отчёта, инструкции по следующим шагам.
+```
 
 ---
 
-## 📊 Сводная таблица: профиль → компоненты
-
-| Компонент | workstation | ai-dev | full | cluster |
-|-----------|:-----------:|:------:|:----:|:-------:|
-| Zsh + Oh My Zsh | ✅ | ✅ | ✅ | ✅ |
-| KDE Plasma | ✅ | ✅ | ✅ | — |
-| Docker | ✅ | ✅ | ✅ | ✅ |
-| Python + AI tools | ✅ | ✅ | ✅ | ✅ |
-| CUDA + cuDNN | — | ✅ | ✅ | ✅ |
-| Hardening (UFW + fail2ban + sysctl) | ✅ | ✅ | ✅ | ✅ |
-| SSH server | — | — | ✅ | — |
-| Tailscale | — | — | ✅ | — |
-| k3s | — | — | ✅ | ✅ |
-| Slurm | — | — | ✅ | ✅ |
-| Monitoring (Prometheus/Grafana) | ✅ | ✅ | ✅ | — |
-| GPU Monitoring (DCGM) | — | ✅ | ✅ | — |
-| Docker Compose | ✅ | ✅ | ✅ | ✅ |
-| Power Tuning | — | — | ✅ | — |
-| Neovim | ✅ | ✅ | ✅ | ✅ |
-| Backup (Borg/Restic) | — | — | ✅ | — |
-
----
-
-## 🧩 Библиотеки (lib/)
+## Библиотеки (lib/)
 
 | Файл | Назначение |
 |------|-----------|
-| `lib/logging.sh` | Централизованный логинг с уровнями `step`, `ok`, `warn`, `err`, `info`; запись в `setup.jsonl` |
-| `lib/utils.sh` | `get_target_user`, `get_user_home`, `pkg_installed`, `command_exists`, `has_nvidia`, `backup_file`, `append_once`, `apply_sysctl` |
-| `lib/installer.sh` | `install_oh_my_zsh_safe`, `safe_download` (с SHA256), `require_cmd` |
-| `lib/profiles.sh` | Профильные переменные и функция `apply_profile_<name>` |
-| `lib/bootstrap.sh` | Инициализация переменных окружения |
+| `lib/logging.sh` | step(), ok(), warn(), err(), log(), log_sep() |
+| `lib/utils.sh` | get_target_user, get_user_home, backup_file, append_once, pkg_installed, command_exists |
+| `lib/installer.sh` | Все функции безопасной установки: safe_download, safe_git_clone, install_oh_my_zsh_safe, install_k3s_safe, install_docker_compose_safe, install_neovim_safe, install_tailscale_safe, generate_random_password |
+| `lib/profiles.sh` | apply_profile_workstation/ai_dev/full/cluster |
+| `lib/bootstrap.sh` | Начальная инициализация, проверка переменных окружения |
 
 ---
 
-## 🔒 Безопасность (важные детали)
+## Идемпотентность
 
-- **safe_download** — верификация SHA256 при скачивании файлов (keyring, артефакты)
-- **idempotency** — `is_installed`, `is_done`, `mark_done` — повторный запуск безопасен
-- **UFW default deny** — весь входящий трафик заблокирован по умолчанию
-- **fail2ban** — SSH-бан после 3 неудачных попыток на 30 минут
-- **sysctl** — kptr_restrict, dmesg_restrict, ptrace_scope, SYN cookies, откл. source route
-- **no curl|sh** — никаких опасных установщиков через пайп
+Каждый stage проверяет состояние **до** внесения изменений:
+
+- `pkg_installed <name>` — проверка через `dpkg -s`
+- `command_exists <cmd>` — проверка через `command -v`
+- `is_done <stage>` — проверка маркера в `state/<stage>.done`
+- `docker ps` — проверка запущенных контейнеров
+- `nvcc --version` — проверка CUDA
+- `tailscale status --self` — проверка Tailscale-авторизации
+
+**Результат**: повторный запуск `pop-os-setup.sh` безвреден — уже установленные компоненты пропускаются.
 
 ---
 
-## 🚀 Запуск
+## Безопасность (Hardening)
 
-```bash
-# Полная установка (все компоненты)
-sudo ./pop-os-setup.sh --profile full
-
-# Только AI/Dev workstation
-sudo ./pop-os-setup.sh --profile ai-dev
-
-# Один stage
-sudo ./pop-os-setup.sh --stage 10
-
-# Dry-run
-sudo ./pop-os-setup.sh --dry-run --profile full
-```
+| Мера | Детали |
+|------|--------|
+| Никаких `curl \| sh` | Все загрузки → файл → проверка → установка |
+| SHA256 verification | safe_download проверяет хеш каждого файла |
+| Проверка зависимостей | require_cmd перед установкой |
+| UFW default deny | Входящие заблокированы, исходящие разрешены |
+| fail2ban | Бан SSH-атак после 3 попыток за 15 мин |
+| sysctl hardening | kptr_restrict, dmesg_restrict, tcp_syncookies, rp_filter |
+| unattended-upgrades | Автоматические патчи безопасности |
+| SSH с ED25519 + passphrase | Ключи с защитой passphrase |
+| Trap handlers | Корректная обработка INT/TERM/ERR |
