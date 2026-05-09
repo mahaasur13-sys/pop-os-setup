@@ -13,8 +13,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_22() {\
+    stage_neovim.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_22() {\
+    stage_neovim.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_22() {\
+    stage_neovim.sh
 
 _STAGE_SOURCED=yes
 
@@ -108,4 +117,5 @@ NVIMEOF
 # Совместимость со старым вызовом
 stage22_neovim() {
     stage_neovim "$@"
+}
 }

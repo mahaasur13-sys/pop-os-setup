@@ -4,7 +4,13 @@
 #===============================================================================
 
 source "${LIBDIR}/logging.sh"
+\
+stage_20() {\
+    stage_gpu_monitoring.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_20() {\
+    stage_gpu_monitoring.sh
 
 stage_gpu_monitoring() {
     step "GPU MONITORING" "20"
@@ -26,4 +32,4 @@ stage_gpu_monitoring() {
     ok "GPU monitoring configured"
 }
 
-stage20_gpu_monitoring() { stage_gpu_monitoring; }
+stage20_gpu_monitoring() { stage_gpu_monitoring; }}

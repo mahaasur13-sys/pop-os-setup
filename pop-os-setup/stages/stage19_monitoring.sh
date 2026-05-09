@@ -14,8 +14,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_19() {\
+    stage_monitoring.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_19() {\
+    stage_monitoring.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_19() {\
+    stage_monitoring.sh
 
 stage_monitoring() {
     step "MONITORING STACK (Prometheus + Grafana)" "19"
@@ -147,4 +156,5 @@ EOF
 # Для совместимости
 stage19_monitoring() {
     stage_monitoring "$@"
+}
 }

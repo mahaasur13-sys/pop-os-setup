@@ -4,7 +4,13 @@
 #===============================================================================
 
 source "${LIBDIR}/logging.sh"
+\
+stage_18() {\
+    stage_dotfiles.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_18() {\
+    stage_dotfiles.sh
 
 stage_dotfiles() {
     step "DOTFILES + SHELL CONFIG" "18"
@@ -42,4 +48,4 @@ stage_dotfiles() {
     ok "Dotfiles linked from $dotfiles_dir"
 }
 
-stage18_dotfiles() { stage_dotfiles; }
+stage18_dotfiles() { stage_dotfiles; }}

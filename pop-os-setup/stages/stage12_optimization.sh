@@ -4,7 +4,13 @@
 #===============================================================================
 
 source "${LIBDIR}/logging.sh"
+\
+stage_12() {\
+    stage_optimization.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_12() {\
+    stage_optimization.sh
 
 stage_optimization() {
     step "SYSTEM OPTIMIZATION" "12"
@@ -34,4 +40,4 @@ stage_optimization() {
     ok "System optimization complete"
 }
 
-stage11_optimization() { stage_optimization; }
+stage11_optimization() { stage_optimization; }}

@@ -1,0 +1,114 @@
+[17:36:45] 🔒 [INTEGRITY GATE v11.2] Pre-execution verification...
+[17:36:45] ✅ Integrity gate PASSED — proceeding
+[17:36:45] Starting installation — Profile: workstation
+[17:36:45] 
+[17:36:45] ══ 01 ══ [Stage 1]
+[17:36:45] [WARN] Function not found: stage_1
+[17:36:45] 
+[17:36:45] ══ 02 ══ [Stage 2]
+[17:36:45] [WARN] Function not found: stage_2
+[17:36:45] 
+[17:36:45] ══ 03 ══ [Stage 3]
+[17:36:45] [WARN] Function not found: stage_3
+[17:36:45] 
+[17:36:45] ══ 04 ══ [Stage 4]
+[17:36:45] [WARN] Function not found: stage_4
+[17:36:45] 
+[17:36:45] ══ 05 ══ [Stage 5]
+[17:36:45] [WARN] Function not found: stage_5
+[17:36:45] 
+[17:36:45] ══ 06 ══ [Stage 6]
+[17:36:45] [WARN] Function not found: stage_6
+[17:36:45] 
+[17:36:45] ══ 07 ══ [Stage 7]
+[17:36:45] [WARN] Function not found: stage_7
+[17:36:45] 
+[17:36:45] ══ 08 ══ [Stage 8]
+[17:36:45] [WARN] Function not found: stage_8
+[17:36:45] 
+[17:36:45] ══ 09 ══ [Stage 9]
+[17:36:45] [WARN] Function not found: stage_9
+[17:36:45] 
+[17:36:45] ══ 10 ══ [Stage 10]
+[17:36:45] [WARN] Function not found: stage_10
+[17:36:45] 
+[17:36:45] ══ 11 ══ [Stage 11]
+[17:36:45] [WARN] Function not found: stage_11
+[17:36:45] 
+[17:36:45] ══ 12 ══ [Stage 12]
+[17:36:45] [WARN] Function not found: stage_12
+[17:36:45] 
+[17:36:45] ══ 13 ══ [Stage 13]
+[17:36:45] [WARN] Function not found: stage_13
+[17:36:45] 
+[17:36:45] ══ 14 ══ [Stage 14]
+[17:36:45] [WARN] Function not found: stage_14
+[17:36:45] 
+[17:36:45] ══ 15 ══ [Stage 15]
+[17:36:45] [WARN] Function not found: stage_15
+[17:36:45] 
+[17:36:45] ══ 16 ══ [Stage 16]
+[17:36:45] [WARN] Function not found: stage_16
+[17:36:45] 
+[17:36:45] ══ 17 ══ [Stage 17]
+[17:36:45] [WARN] Function not found: stage_17
+[17:36:45] 
+[17:36:45] ══ 18 ══ [Stage 18]
+[17:36:45] [WARN] Function not found: stage_18
+[17:36:45] 
+[17:36:45] ══ 19 ══ [Stage 19]
+[17:36:45] [WARN] Function not found: stage_19
+[17:36:45] 
+[17:36:45] ══ 20 ══ [Stage 20]
+[17:36:45] [WARN] Function not found: stage_20
+[17:36:45] 
+[17:36:45] ══ 21 ══ [Stage 21]
+[17:36:45] [WARN] Function not found: stage_21
+[17:36:45] 
+[17:36:45] ══ 22 ══ [Stage 22]
+[17:36:45] [WARN] Function not found: stage_22
+[17:36:45] 
+[17:36:45] ══ 23 ══ [Stage 23]
+[17:36:45] [WARN] Function not found: stage_23
+[17:36:45] 
+[17:36:45] ══ 24 ══ [Stage 24]
+[17:36:45] [WARN] Function not found: stage_24
+[17:36:45] 
+[17:36:45] ══ 25 ══ [Stage 25]
+[17:36:45] [WARN] Function not found: stage_25
+[17:36:45] 
+[17:36:45] ══ 26 ══ [Stage 26]
+[17:36:45] [WARN] Function not found: stage_26
+[17:36:45] [OK]  Running Intent Compliance Validation...
+[17:42:16] 🔒 [INTEGRITY GATE v11.2] Pre-execution verification...
+[17:42:16] ✅ Integrity gate PASSED — proceeding
+[17:42:16] Starting installation — Profile: workstation
+[17:42:16] [WARN] Stage 1 not found — skipping
+[17:42:16] [WARN] Stage 2 not found — skipping
+[17:42:16] [WARN] Stage 3 not found — skipping
+[17:42:16] [WARN] Stage 4 not found — skipping
+[17:42:16] [WARN] Stage 5 not found — skipping
+[17:42:16] [WARN] Stage 6 not found — skipping
+[17:42:16] [WARN] Stage 7 not found — skipping
+[17:42:16] [WARN] Stage 8 not found — skipping
+[17:42:16] [WARN] Stage 9 not found — skipping
+[17:42:16] [WARN] Stage 10 not found — skipping
+[17:42:16] [WARN] Stage 11 not found — skipping
+[17:42:16] [WARN] Stage 12 not found — skipping
+[17:42:16] [WARN] Stage 13 not found — skipping
+[17:42:16] [WARN] Stage 14 not found — skipping
+[17:42:16] [WARN] Stage 15 not found — skipping
+[17:42:16] [WARN] Stage 16 not found — skipping
+[17:42:16] 
+[17:42:16] ══ 17 ══ [Stage 17]
+[17:42:16] [WARN] Function not found: stage_17
+[17:42:16] [WARN] Stage 18 not found — skipping
+[17:42:16] [WARN] Stage 19 not found — skipping
+[17:42:16] [WARN] Stage 20 not found — skipping
+[17:42:16] [WARN] Stage 21 not found — skipping
+[17:42:16] [WARN] Stage 22 not found — skipping
+[17:42:16] [WARN] Stage 23 not found — skipping
+[17:42:16] [WARN] Stage 24 not found — skipping
+[17:42:16] [WARN] Stage 25 not found — skipping
+[17:42:16] [WARN] Stage 26 not found — skipping
+[17:42:16] [OK]  Running Intent Compliance Validation...

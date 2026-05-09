@@ -15,7 +15,13 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_26() {\
+    stage_final.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_26() {\
+    stage_final.sh
 
 _STAGE_SOURCED=yes
 
@@ -133,4 +139,5 @@ stage_final() {
 # Для совместимости со старым вызовом
 stage26_final() {
     stage_final "$@"
+}
 }

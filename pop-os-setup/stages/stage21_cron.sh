@@ -15,7 +15,13 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_21() {\
+    stage_cron.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_21() {\
+    stage_cron.sh
 
 _STAGE_SOURCED=yes
 
@@ -165,4 +171,5 @@ stage_cron() {
 # Для совместимости
 stage21_cron() {
     stage_cron "$@"
+}
 }

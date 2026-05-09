@@ -13,8 +13,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_9() {\
+    stage_cuda.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_9() {\
+    stage_cuda.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_9() {\
+    stage_cuda.sh
 
 stage_cuda() {
     step "CUDA TOOLKIT + cuDNN" "09"
@@ -104,3 +113,4 @@ EOF
 
 # Совместимость
 stage09_cuda() { stage_cuda "$@"; }
+}

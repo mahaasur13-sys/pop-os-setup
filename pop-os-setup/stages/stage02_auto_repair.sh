@@ -11,7 +11,13 @@
 }
 
 source "${LIBDIR}/logging.sh" 2>/dev/null || true
+\
+stage_2() {\
+    stage_auto_repair.sh
 source "${LIBDIR}/utils.sh" 2>/dev/null || true
+\
+stage_2() {\
+    stage_auto_repair.sh
 
 stage02_auto_repair() {
     step "SYSTEM UPDATE (AUTO-REPAIR)" "02"
@@ -27,4 +33,4 @@ stage02_auto_repair() {
     return 0
 }
 
-stage02() { stage02_auto_repair "$@"; }
+stage02() { stage02_auto_repair "$@"; }}

@@ -4,7 +4,13 @@
 #===============================================================================
 
 source "${LIBDIR}/logging.sh"
+\
+stage_15() {\
+    stage_slurm.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_15() {\
+    stage_slurm.sh
 
 stage_slurm() {
     step "SLURM WORKLOAD MANAGER" "15"
@@ -32,4 +38,4 @@ stage_slurm() {
     log "Note: Configure slurm.conf for your cluster before use"
 }
 
-stage15_slurm() { stage_slurm; }
+stage15_slurm() { stage_slurm; }}

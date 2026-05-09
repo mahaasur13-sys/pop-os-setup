@@ -98,3 +98,4 @@ install_portainer_if_needed() {
 }
 
 stage17_docker_compose() { stage_docker_compose "$@"; }
+}

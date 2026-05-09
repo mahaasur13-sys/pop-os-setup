@@ -11,7 +11,13 @@
 }
 
 source "${LIBDIR}/logging.sh" 2>/dev/null || true
+\
+stage_3() {\
+    stage_auto_repair.sh
 source "${LIBDIR}/utils.sh" 2>/dev/null || true
+\
+stage_3() {\
+    stage_auto_repair.sh
 
 stage03_auto_repair() {
     step "NVIDIA DETECTION (AUTO-REPAIR)" "03"
@@ -29,4 +35,4 @@ stage03_auto_repair() {
     return 0
 }
 
-stage03() { stage03_auto_repair "$@"; }
+stage03() { stage03_auto_repair "$@"; }}

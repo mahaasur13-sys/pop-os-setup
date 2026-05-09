@@ -11,7 +11,13 @@
 }
 
 source "${LIBDIR}/logging.sh" 2>/dev/null || true
+\
+stage_8() {\
+    stage_auto_repair.sh
 source "${LIBDIR}/utils.sh" 2>/dev/null || true
+\
+stage_8() {\
+    stage_auto_repair.sh
 
 stage08_auto_repair() {
     step "ZSH (AUTO-REPAIR)" "08"
@@ -27,4 +33,4 @@ stage08_auto_repair() {
     return 0
 }
 
-stage08() { stage08_auto_repair "$@"; }
+stage08() { stage08_auto_repair "$@"; }}

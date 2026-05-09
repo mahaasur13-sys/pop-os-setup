@@ -4,7 +4,13 @@
 #===============================================================================
 
 source "${LIBDIR}/logging.sh"
+\
+stage_16() {\
+    stage_power.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_16() {\
+    stage_power.sh
 
 stage_power() {
     step "SYSTEM76 POWER + GPU TUNING" "16"
@@ -37,4 +43,4 @@ stage_power() {
     ok "Power management configured"
 }
 
-stage16_power() { stage_power; }
+stage16_power() { stage_power; }}

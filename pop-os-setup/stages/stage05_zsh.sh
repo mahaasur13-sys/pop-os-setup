@@ -13,8 +13,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_5() {\
+    stage_zsh.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_5() {\
+    stage_zsh.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_5() {\
+    stage_zsh.sh
 
 stage_zsh() {
     step "ZSH + OH MY ZSH" "05"
@@ -76,4 +85,4 @@ stage_zsh() {
 # Для совместимости со старым вызовом
 stage05_zsh() {
     stage_zsh "$@"
-}
+}}

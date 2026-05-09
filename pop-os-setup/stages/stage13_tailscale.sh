@@ -13,8 +13,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_13() {\
+    stage_tailscale.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_13() {\
+    stage_tailscale.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_13() {\
+    stage_tailscale.sh
 
 stage_tailscale() {
     step "TAILSCALE VPN" "13"
@@ -92,3 +101,4 @@ stage_tailscale() {
 
 # Compatibility alias
 stage13_tailscale() { stage_tailscale "$@"; }
+}

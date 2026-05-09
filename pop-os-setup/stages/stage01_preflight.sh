@@ -101,3 +101,4 @@ stage_preflight() {
 }
 
 stage01_preflight() { stage_preflight "$@"; }
+}

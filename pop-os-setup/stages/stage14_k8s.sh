@@ -14,8 +14,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_14() {\
+    stage_k8s.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_14() {\
+    stage_k8s.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_14() {\
+    stage_k8s.sh
 
 stage_k8s() {
     step "K3S KUBERNETES (Single Node)" "14"
@@ -84,4 +93,5 @@ stage_k8s() {
 # Для совместимости со старым вызовом
 stage14_k8s() {
     stage_k8s "$@"
+}
 }

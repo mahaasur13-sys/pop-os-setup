@@ -12,8 +12,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_24() {\
+    stage_ssh_gpg.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_24() {\
+    stage_ssh_gpg.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_24() {\
+    stage_ssh_gpg.sh
 
 _STAGE_SOURCED=yes
 
@@ -207,4 +216,5 @@ stage_ssh_gpg() {
 # Совместимость со старым вызовом
 stage24_ssh_gpg() {
     stage_ssh_gpg "$@"
+}
 }

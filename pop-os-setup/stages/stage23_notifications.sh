@@ -16,7 +16,13 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_23() {\
+    stage_notifications.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_23() {\
+    stage_notifications.sh
 
 _STAGE_SOURCED=yes
 
@@ -222,4 +228,4 @@ EOF
 # Для совместимости
 stage23_notifications() {
     stage_notifications "$@"
-}
+}}

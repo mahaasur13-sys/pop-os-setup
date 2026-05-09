@@ -16,8 +16,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_25() {\
+    stage_backup.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_25() {\
+    stage_backup.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_25() {\
+    stage_backup.sh
 
 _STAGE_SOURCED=yes
 
@@ -199,4 +208,5 @@ EOF
 # Для совместимости со старым вызовом
 stage25_backup() {
     stage_backup "$@"
+}
 }

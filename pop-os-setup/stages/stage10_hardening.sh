@@ -16,8 +16,17 @@
 }
 
 source "${LIBDIR}/logging.sh"
+\
+stage_10() {\
+    stage_hardening.sh
 source "${LIBDIR}/utils.sh"
+\
+stage_10() {\
+    stage_hardening.sh
 source "${LIBDIR}/installer.sh"
+\
+stage_10() {\
+    stage_hardening.sh
 
 _STAGE_SOURCED=yes
 
@@ -155,4 +164,4 @@ EOF
 # Для совместимости со старым вызовом
 stage10_hardening() {
     stage_hardening "$@"
-}
+}}

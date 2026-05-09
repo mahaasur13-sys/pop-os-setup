@@ -11,7 +11,13 @@
 }
 
 source "${LIBDIR}/logging.sh" 2>/dev/null || true
+\
+stage_4() {\
+    stage_auto_repair.sh
 source "${LIBDIR}/utils.sh" 2>/dev/null || true
+\
+stage_4() {\
+    stage_auto_repair.sh
 
 stage04_auto_repair() {
     step "DISPLAY MANAGER (AUTO-REPAIR)" "04"
@@ -23,4 +29,4 @@ stage04_auto_repair() {
     return 0
 }
 
-stage04() { stage04_auto_repair "$@"; }
+stage04() { stage04_auto_repair "$@"; }}
